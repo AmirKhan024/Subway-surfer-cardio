@@ -22,6 +22,7 @@ import RunnerHUD, { type HudState } from './runner-hud';
 import { useCamera } from '@/lib/mediapipe/use-camera';
 import { usePoseDetector } from '@/lib/mediapipe/use-pose';
 import TrackingPip from './tracking-pip';
+import { klog } from '@/lib/debug/run-logger';
 
 type UiPhase = 'booting' | 'calibrating' | 'countdown' | 'playing' | 'done';
 
@@ -58,6 +59,7 @@ export default function RunnerLayer({
   const phaseRef = useRef<UiPhase>('booting');
   const countdownEndRef = useRef(0);
   const lastHudAtRef = useRef(0);
+  const lastTrackingRef = useRef(true);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
@@ -75,6 +77,7 @@ export default function RunnerLayer({
   const setPhase = useCallback((p: UiPhase) => {
     phaseRef.current = p;
     setUiPhase(p);
+    klog('PHASE', { phase: p });
   }, []);
 
   // ── pose boot (body-control mode only) ─────────────────────────────────
@@ -84,15 +87,18 @@ export default function RunnerLayer({
     (async () => {
       try {
         if (!videoRef.current) return;
+        klog('CAMERA_START', {});
         await camera.start(videoRef.current);
         await pose.init();
         if (cancelled) return;
+        klog('POSE_INIT', {});
         pose.startDetection(videoRef.current, (landmarks) => {
           latestLandmarksRef.current = landmarks;
           if (landmarks) lastSeenAtRef.current = performance.now();
         });
       } catch (err) {
         if (!cancelled) {
+          klog('POSE_FAIL', { error: err instanceof Error ? err.message : String(err) });
           setPoseError(
             err instanceof Error
               ? err.message
@@ -186,6 +192,9 @@ export default function RunnerLayer({
           break;
       }
 
+      // forward engine diagnostic events to the browser logger (usually empty)
+      for (const e of engine.drainEvents()) klog(e.tag, e.data);
+
       scene.update(engine.getSceneState(), now);
 
       // 2D debug overlay
@@ -212,9 +221,13 @@ export default function RunnerLayer({
           cue: s.cue,
           lowImpact: s.lowImpact,
         });
-        setTracking(
-          engine.isTracking() && (controlMode === 'keyboard' || now - lastSeenAtRef.current < 700),
-        );
+        const trackingNow =
+          engine.isTracking() && (controlMode === 'keyboard' || now - lastSeenAtRef.current < 700);
+        if (trackingNow !== lastTrackingRef.current) {
+          lastTrackingRef.current = trackingNow;
+          klog(trackingNow ? 'TRACKING_OK' : 'TRACKING_LOST', {});
+        }
+        setTracking(trackingNow);
         setDrifting(engine.getDriftState().drifting);
       }
 

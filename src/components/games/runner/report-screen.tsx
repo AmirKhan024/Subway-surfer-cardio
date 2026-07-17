@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 import type { RunnerRawData } from '@/types/raw-data';
 import { computeKR1Score, type KR1ScoreResult } from '@/lib/scoring/kr1-local';
+import { getDiagnosticsText } from '@/lib/debug/run-logger';
 
 interface RunRecord {
   musculage: number;
@@ -66,6 +67,20 @@ export default function ReportScreen({
   const [score, setScore] = useState<KR1ScoreResult | null>(null);
   const [deltaMusculage, setDeltaMusculage] = useState<number | null>(null);
   const [personalBest, setPersonalBest] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copyDiagnostics = async () => {
+    try {
+      await navigator.clipboard.writeText(getDiagnosticsText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // clipboard blocked (http / permissions) — fall back to console
+      // eslint-disable-next-line no-console
+      console.log(getDiagnosticsText());
+      alert('Clipboard unavailable — diagnostics printed to the console instead.');
+    }
+  };
 
   useEffect(() => {
     const s = computeKR1Score(raw, age);
@@ -189,6 +204,13 @@ export default function ReportScreen({
             Settings
           </button>
         </div>
+
+        <button
+          onClick={copyDiagnostics}
+          className="mt-3 w-full rounded-lg border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-slate-400 transition hover:text-slate-200"
+        >
+          {copied ? 'Copied ✓ — paste it to the developer' : '🔍 Copy diagnostics'}
+        </button>
 
         <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-center text-xs text-amber-200">
           ⚠️ Avoid if you have active pain. Consult a physician first.

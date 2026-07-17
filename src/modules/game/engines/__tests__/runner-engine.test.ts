@@ -561,6 +561,79 @@ describe('RunnerEngine — metrics math', () => {
   });
 });
 
+// ── diagnostic events (drained by the layer) ───────────────────────────────
+
+describe('RunnerEngine — diagnostic events', () => {
+  it('a full run emits RUN_RESET, OBSTACLE per obstacle with gate values, REP per rep, RUN_DONE', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    const events = engine.drainEvents();
+    const tags = events.map((e) => e.tag);
+    expect(tags).toContain('RUN_RESET');
+    expect(tags).toContain('RUN_DONE');
+    const obstacles = events.filter((e) => e.tag === 'OBSTACLE');
+    expect(obstacles).toHaveLength(20);
+    for (const ob of obstacles) {
+      expect(ob.data.cleared).toBe(true);
+      expect(typeof ob.data.crouchAtGate).toBe('number');
+      expect(typeof ob.data.jumpYAtGate).toBe('number');
+      expect(typeof ob.data.livesLeft).toBe('number');
+    }
+    const reps = events.filter((e) => e.tag === 'REP');
+    expect(reps.length).toBeGreaterThanOrEqual(20);
+    for (const rep of reps) {
+      expect(['squat', 'jump', 'heel']).toContain(rep.data.kind);
+      expect(typeof rep.data.clean).toBe('boolean');
+    }
+  });
+
+  it('failed obstacles carry the gate values that explain the miss', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'idle');
+    const obstacles = engine.drainEvents().filter((e) => e.tag === 'OBSTACLE');
+    expect(obstacles).toHaveLength(3); // 3 lives burned
+    for (const ob of obstacles) {
+      expect(ob.data.cleared).toBe(false);
+      expect(ob.data.crouchAtGate).toBe(0);
+      expect(ob.data.jumpYAtGate).toBe(0);
+    }
+  });
+
+  it('drainEvents clears the buffer (second drain is empty)', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    expect(engine.drainEvents().length).toBeGreaterThan(0);
+    expect(engine.drainEvents()).toHaveLength(0);
+  });
+
+  it('calibration lock emits CALIB_LOCK with the captured baseline', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    calibrate(engine);
+    const lock = engine.drainEvents().find((e) => e.tag === 'CALIB_LOCK');
+    expect(lock).toBeDefined();
+    expect(lock!.data.hipY0).toBeCloseTo(0.6, 1);
+    expect(lock!.data.shoulderW0).toBeCloseTo(0.2, 1);
+  });
+
+  it('sustained drift emits DRIFT_ON then DRIFT_OFF on recenter', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    let t = calibrate(engine);
+    engine.startPlaying();
+    engine.drainEvents();
+    for (let i = 0; i < 75; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6, shoulderW: 0.28 }), t);
+    }
+    for (let i = 0; i < 10; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6, shoulderW: 0.2 }), t);
+    }
+    const tags = engine.drainEvents().map((e) => e.tag);
+    expect(tags).toContain('DRIFT_ON');
+    expect(tags).toContain('DRIFT_OFF');
+  });
+});
+
 // ── raw data invariant ─────────────────────────────────────────────────────
 
 describe('RunnerRawData invariant', () => {

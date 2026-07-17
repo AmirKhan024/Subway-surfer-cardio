@@ -56,6 +56,16 @@ export interface SceneObstacle {
   cleared: boolean;
 }
 
+/**
+ * Diagnostic event emitted by the engine and drained by the layer (which
+ * forwards to the browser logger). Keeps the engine pure — it never touches
+ * window/console itself.
+ */
+export interface EngineEvent {
+  tag: string;
+  data: Record<string, unknown>;
+}
+
 export interface RunnerSceneState {
   phase: RunnerPhase;
   distance: number;
@@ -94,6 +104,7 @@ export class RunnerEngine implements GameEngine {
   // ── calibration ──
   private calHoldStart = 0; // 0 = not holding
   private calStartTs = 0;
+  private calTimeoutEmitted = false;
   private calHipSamples: number[] = [];
   private calShoulderSamples: number[] = [];
   private hipY0 = 0;
@@ -137,6 +148,19 @@ export class RunnerEngine implements GameEngine {
   private cueShownAt: number[] = [];
   private reactionRecorded: boolean[] = [];
   private reactionMsList: number[] = [];
+
+  // ── diagnostics (drained by the layer; engine stays pure) ──
+  private events: EngineEvent[] = [];
+  private emit(tag: string, data: Record<string, unknown> = {}): void {
+    if (this.events.length < 256) this.events.push({ tag, data });
+  }
+  /** Returns and clears the pending diagnostic events (cheap array swap). */
+  drainEvents(): EngineEvent[] {
+    if (this.events.length === 0) return this.events;
+    const out = this.events;
+    this.events = [];
+    return out;
+  }
 
   // ── metric accumulators ──
   private squatReps = 0;
@@ -203,6 +227,12 @@ export class RunnerEngine implements GameEngine {
       this.calibrated = true;
       this.phase = 'ready';
     }
+    this.emit('RUN_RESET', {
+      seed: this.seed,
+      controlMode: this.controlMode,
+      lowImpact: this.lowImpact,
+      obstacles: this.obstacles.length,
+    });
   }
 
   destroy(): void {
@@ -274,6 +304,10 @@ export class RunnerEngine implements GameEngine {
   private calibrateFrame(landmarks: NormalizedLandmark[], now: number): CalibrationStatus {
     if (this.calStartTs === 0) this.calStartTs = now;
     if (this.calStartTs !== 0 && now - this.calStartTs > CALIB.TIMEOUT_MS) {
+      if (!this.calTimeoutEmitted) {
+        this.calTimeoutEmitted = true;
+        this.emit('CALIB_TIMEOUT', { heldMs: now - this.calHoldStart });
+      }
       return {
         isReady: false,
         progress: 0,
@@ -305,6 +339,7 @@ export class RunnerEngine implements GameEngine {
         this.calHoldStart = 0;
         this.calHipSamples = [];
         this.calShoulderSamples = [];
+        this.emit('CALIB_WOBBLE_RESET', { hipY, mean });
       }
     }
 
@@ -324,6 +359,11 @@ export class RunnerEngine implements GameEngine {
       this.heelY0 = heels ?? this.hipY0 + 0.35;
       this.calibrated = true;
       this.phase = 'ready';
+      this.emit('CALIB_LOCK', {
+        hipY0: this.hipY0,
+        shoulderW0: this.shoulderW0,
+        heldMs,
+      });
       return { isReady: true, progress: 1, message: 'Locked in!' };
     }
 
@@ -338,6 +378,8 @@ export class RunnerEngine implements GameEngine {
     this.calibrated = false;
     this.calStartTs = 0;
     this.calHoldStart = 0;
+    this.calTimeoutEmitted = false;
+    this.emit('CALIB_RETRY', {});
     this.calHipSamples = [];
     this.calShoulderSamples = [];
     if (this.controlMode === 'pose') this.phase = 'calibrating';
@@ -404,6 +446,12 @@ export class RunnerEngine implements GameEngine {
     if (this.lives <= 0 || this.resolved.every(Boolean)) {
       this.phase = 'done';
       this.finalizePendingReps();
+      this.emit('RUN_DONE', {
+        lives: this.lives,
+        resolved: this.resolved.filter(Boolean).length,
+        cleared: this.clearedFlags.filter(Boolean).length,
+        distance: this.distance,
+      });
     }
 
     this.updateCameraFeel(dt);
@@ -422,6 +470,15 @@ export class RunnerEngine implements GameEngine {
       this.hitFlashAt = now;
     }
     if (this.cue?.obstacleId === ob.id) this.cue = null;
+    // the "why did I fail that one" log: signal values AT the gate
+    this.emit('OBSTACLE', {
+      id: ob.id,
+      type: ob.type,
+      cleared,
+      crouchAtGate: this.crouch,
+      jumpYAtGate: this.jumpY(),
+      livesLeft: this.lives,
+    });
   }
 
   private updateCue(now: number): void {
@@ -576,7 +633,9 @@ export class RunnerEngine implements GameEngine {
     }
     this.squatReps += 1;
     this.squatDepthSum += this.squatPeak;
-    if (this.squatPeak >= DETECT.SQUAT_CLEAN) this.cleanReps += 1;
+    const clean = this.squatPeak >= DETECT.SQUAT_CLEAN;
+    if (clean) this.cleanReps += 1;
+    this.emit('REP', { kind: 'squat', peak: this.squatPeak, clean });
     this.squatPeak = 0;
   }
 
@@ -619,12 +678,19 @@ export class RunnerEngine implements GameEngine {
     const scaleOff =
       Math.abs(shoulderW - this.shoulderW0) / Math.max(0.05, this.shoulderW0) >
       DRIFT.SCALE_BAND;
+    const wasDrifting = this.driftActive;
     if (scaleOff) {
       if (this.driftSince === 0) this.driftSince = now;
       this.driftActive = now - this.driftSince > DRIFT.SUSTAIN_MS;
     } else {
       this.driftSince = 0;
       this.driftActive = false;
+    }
+    if (this.driftActive !== wasDrifting) {
+      this.emit(this.driftActive ? 'DRIFT_ON' : 'DRIFT_OFF', {
+        shoulderW,
+        shoulderW0: this.shoulderW0,
+      });
     }
   }
 
@@ -673,6 +739,7 @@ export class RunnerEngine implements GameEngine {
     this.jumpMeasuredPeak = 0;
     this.jumpReps += 1;
     this.recordReaction('jump', now);
+    this.emit('JUMP_TRIGGER', { mode: this.controlMode, lowImpact: this.lowImpact });
   }
 
   private advanceJumpArc(now: number, _dt: number): void {
@@ -685,7 +752,9 @@ export class RunnerEngine implements GameEngine {
       const norm = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_APEX;
       const cleanAt = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_CLEAN;
       this.jumpHeightSum += clamp01(peak / norm);
-      if (peak >= cleanAt) this.cleanReps += 1;
+      const clean = peak >= cleanAt;
+      if (clean) this.cleanReps += 1;
+      this.emit('REP', { kind: this.lowImpact ? 'heel' : 'jump', peak, clean });
       this.jumpStartTs = 0;
     }
   }
@@ -700,7 +769,9 @@ export class RunnerEngine implements GameEngine {
       const norm = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_APEX;
       const cleanAt = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_CLEAN;
       this.jumpHeightSum += clamp01(peak / norm);
-      if (peak >= cleanAt) this.cleanReps += 1;
+      const clean = peak >= cleanAt;
+      if (clean) this.cleanReps += 1;
+      this.emit('REP', { kind: this.lowImpact ? 'heel' : 'jump', peak, clean, finalized: true });
       this.jumpStartTs = 0;
     }
     if (this.squatState !== 'neutral') {
