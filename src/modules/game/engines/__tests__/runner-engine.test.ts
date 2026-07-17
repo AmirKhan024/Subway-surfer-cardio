@@ -5,14 +5,16 @@
  * keyboard path. Harness pattern per new_kriya_move's engine tests.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { RunnerEngine } from '../runner-engine';
 import {
   generateCourse,
+  generateCoins,
   speedAtIndex,
   mulberry32,
   seedForAttempt,
 } from '../runner-timeline';
-import { COURSE, DETECT, CALIB } from '@/components/games/runner/runner-constants';
+import { COURSE, DETECT, CALIB, COIN } from '@/components/games/runner/runner-constants';
 import type { NormalizedLandmark } from '../types';
 import { LM } from '../types';
 
@@ -125,6 +127,94 @@ describe('runner-timeline', () => {
     expect(seedForAttempt(0)).toBe(COURSE.ASSESSMENT_SEED);
     expect(seedForAttempt(1)).toBe(COURSE.SEED_POOL[1]);
     expect(seedForAttempt(COURSE.SEED_POOL.length)).toBe(COURSE.ASSESSMENT_SEED);
+  });
+});
+
+// ── coins (engagement only) ────────────────────────────────────────────────
+
+describe('runner-timeline — coins', () => {
+  it('is deterministic per seed and independent of the obstacle stream', () => {
+    const obstacles = generateCourse(1337);
+    expect(generateCoins(1337, obstacles)).toEqual(generateCoins(1337, obstacles));
+    expect(generateCoins(1337, obstacles)).not.toEqual(generateCoins(2861, obstacles));
+    // coin generation must not perturb the course itself
+    expect(generateCourse(1337)).toEqual(obstacles);
+  });
+
+  it('ground coins stay clear of every action plane; aerials sit just past hurdles', () => {
+    for (const seed of COURSE.SEED_POOL) {
+      const obstacles = generateCourse(seed);
+      const coins = generateCoins(seed, obstacles);
+      expect(coins.length).toBeGreaterThan(20);
+      const hurdlePlanes = new Set(
+        obstacles.filter((o) => o.type === 'hurdle').map((o) => o.atDistance),
+      );
+      for (const coin of coins) {
+        if (coin.aerial) {
+          const owner = coin.atDistance - COIN.AERIAL_OFFSET_M;
+          expect(hurdlePlanes.has(owner), `aerial coin ${coin.id} must sit past a hurdle`).toBe(true);
+        } else {
+          for (const ob of obstacles) {
+            expect(
+              Math.abs(coin.atDistance - ob.atDistance),
+              `ground coin ${coin.id} too close to obstacle ${ob.id}`,
+            ).toBeGreaterThanOrEqual(COIN.CLEARANCE_M - 1e-9);
+          }
+        }
+      }
+    }
+  });
+});
+
+describe('RunnerEngine — coin collection', () => {
+  it('perfect run collects a deterministic count including every aerial coin', () => {
+    const a = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(a, 'perfect');
+    const b = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(b, 'perfect');
+    const rawA = a.getRawData();
+    expect(rawA.coinsCollected).toBe(b.getRawData().coinsCollected);
+    expect(rawA.coinsCollected).toBeGreaterThan(0);
+    // the perfect bot jumps every hurdle with the arc high at +0.5m, so all
+    // 10 aerial coins are included: count must exceed the ground-only total
+    const idle = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(idle, 'idle');
+    const idleRaw = idle.getRawData();
+    // idle dies at obstacle 3 but still auto-collects ground coins it passed
+    expect(idleRaw.coinsCollected).toBeGreaterThanOrEqual(0);
+    expect(idleRaw.coinsCollected).toBeLessThan(rawA.coinsCollected);
+  });
+
+  it('an idle player never grabs aerial coins (no jump = arc never high)', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'idle');
+    const coinEvents = engine
+      .drainEvents()
+      .filter((e) => e.tag === 'COIN')
+      .map((e) => e.data as { aerial: boolean });
+    for (const c of coinEvents) expect(c.aerial).toBe(false);
+  });
+
+  it('emits COIN events and SQUAT_START before the first SQUAT rep', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    const events = engine.drainEvents();
+    const tags = events.map((e) => e.tag);
+    expect(tags).toContain('COIN');
+    const squatStart = tags.indexOf('SQUAT_START');
+    const firstSquatRep = events.findIndex(
+      (e) => e.tag === 'REP' && (e.data as { kind: string }).kind === 'squat',
+    );
+    expect(squatStart).toBeGreaterThanOrEqual(0);
+    expect(firstSquatRep).toBeGreaterThan(squatStart);
+  });
+});
+
+describe('engine purity — audio never enters the engine', () => {
+  it('runner-engine.ts has no audio import', () => {
+    const src = readFileSync(new URL('../runner-engine.ts', import.meta.url), 'utf8');
+    expect(src.includes('audio-manager')).toBe(false);
+    expect(src.includes('AudioContext')).toBe(false);
   });
 });
 

@@ -7,6 +7,7 @@
  * control-mode choice.
  */
 import { useEffect, useState } from 'react';
+import { audioManager } from '@/lib/audio/audio-manager';
 
 export interface RunnerProfile {
   age: number;
@@ -47,6 +48,11 @@ export default function StartScreen({
   const [gender, setGender] = useState<RunnerProfile['gender']>('male');
   const [lowImpact, setLowImpact] = useState(false);
   const [bobScale, setBobScale] = useState(1);
+  const [sound, setSound] = useState(true);
+
+  useEffect(() => {
+    setSound(!audioManager.isMuted());
+  }, []);
 
   useEffect(() => {
     const saved = loadProfile();
@@ -61,6 +67,9 @@ export default function StartScreen({
   }, []);
 
   const start = (mode: 'keyboard' | 'pose' | 'head') => {
+    // audio MUST init inside a user gesture (autoplay policy)
+    audioManager.init();
+    audioManager.setMuted(!sound);
     const parsed = Math.round(Number(age));
     const validAge = Number.isFinite(parsed) && parsed >= 5 && parsed <= 110 ? parsed : 35;
     const profile: RunnerProfile = { age: validAge, gender, lowImpact, bobScale };
@@ -112,6 +121,16 @@ export default function StartScreen({
             className="h-4 w-4 accent-cyan-500"
           />
           Low-impact mode — heel-raise instead of jump
+        </label>
+
+        <label className="mt-3 flex items-center gap-2 text-sm text-slate-200">
+          <input
+            type="checkbox"
+            checked={sound}
+            onChange={(e) => setSound(e.target.checked)}
+            className="h-4 w-4 accent-cyan-500"
+          />
+          Sound — calm music + effects
         </label>
 
         <label className="mt-3 block text-sm text-slate-300">

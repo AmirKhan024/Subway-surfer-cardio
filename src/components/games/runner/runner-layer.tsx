@@ -23,6 +23,26 @@ import { useCamera } from '@/lib/mediapipe/use-camera';
 import { usePoseDetector } from '@/lib/mediapipe/use-pose';
 import TrackingPip from './tracking-pip';
 import { klog } from '@/lib/debug/run-logger';
+import { audioManager, type SfxName } from '@/lib/audio/audio-manager';
+import type { EngineEvent } from '@/modules/game/engines/runner-engine';
+
+/** Engine event → sound, at the layer edge (the engine never touches audio). */
+function sfxForEvent(e: EngineEvent): SfxName | null {
+  switch (e.tag) {
+    case 'COIN':
+      return 'coin';
+    case 'JUMP_TRIGGER':
+      return 'jump';
+    case 'SQUAT_START':
+      return 'squat';
+    case 'OBSTACLE':
+      return e.data.cleared === false ? 'life' : null;
+    case 'RUN_DONE':
+      return 'gameover';
+    default:
+      return null;
+  }
+}
 
 type UiPhase = 'booting' | 'calibrating' | 'countdown' | 'playing' | 'done';
 
@@ -60,6 +80,7 @@ export default function RunnerLayer({
   const countdownEndRef = useRef(0);
   const lastHudAtRef = useRef(0);
   const lastTrackingRef = useRef(true);
+  const lastCountdownRef = useRef(-1);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
@@ -70,6 +91,13 @@ export default function RunnerLayer({
   const [tracking, setTracking] = useState(true);
   const [drifting, setDrifting] = useState(false);
   const [poseError, setPoseError] = useState<string | null>(null);
+  const [muted, setMuted] = useState(() => audioManager.isMuted());
+
+  const toggleMute = useCallback(() => {
+    const next = !audioManager.isMuted();
+    audioManager.setMuted(next);
+    setMuted(next);
+  }, []);
 
   const camera = useCamera();
   const pose = usePoseDetector();
@@ -176,10 +204,16 @@ export default function RunnerLayer({
         case 'countdown': {
           engine.processFrame(lms, now);
           const remaining = Math.max(0, countdownEndRef.current - now);
-          setCountdown(Math.ceil(remaining / 1000));
+          const n = Math.ceil(remaining / 1000);
+          if (n !== lastCountdownRef.current) {
+            lastCountdownRef.current = n;
+            audioManager.sfx(n > 0 ? 'countdown' : 'go');
+          }
+          setCountdown(n);
           if (remaining <= 0) {
             engine.startPlaying();
             setPhase('playing');
+            audioManager.playMusic();
           }
           break;
         }
@@ -195,8 +229,13 @@ export default function RunnerLayer({
           break;
       }
 
-      // forward engine diagnostic events to the browser logger (usually empty)
-      for (const e of engine.drainEvents()) klog(e.tag, e.data);
+      // forward engine diagnostic events to the logger + audio (usually empty)
+      for (const e of engine.drainEvents()) {
+        klog(e.tag, e.data);
+        const sound = sfxForEvent(e);
+        if (sound) audioManager.sfx(sound);
+        if (e.tag === 'RUN_DONE') audioManager.duckMusic(2);
+      }
 
       scene.update(engine.getSceneState(), now);
 
@@ -225,6 +264,7 @@ export default function RunnerLayer({
           cue: s.cue,
           lowImpact: s.lowImpact,
           headMode: controlMode === 'head',
+          coins: s.coinsCollected,
         });
         const trackingNow =
           engine.isTracking() && (controlMode === 'keyboard' || now - lastSeenAtRef.current < 700);
@@ -260,6 +300,7 @@ export default function RunnerLayer({
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
       detachKb();
+      audioManager.stopMusic();
       scene.dispose();
       sceneRef.current = null;
       canvas.remove();
@@ -282,6 +323,17 @@ export default function RunnerLayer({
       <video ref={videoRef} playsInline muted className="hidden" />
 
       {hud && uiPhase === 'playing' && <RunnerHUD hud={hud} />}
+
+      {/* mute chip — usable mid-run */}
+      {(uiPhase === 'playing' || uiPhase === 'countdown') && (
+        <button
+          onClick={toggleMute}
+          className="absolute bottom-10 right-3 z-30 rounded-xl border border-white/15 bg-slate-950/60 px-3 py-1.5 text-sm text-slate-50 backdrop-blur-md"
+          aria-label={muted ? 'Unmute' : 'Mute'}
+        >
+          {muted ? '🔇' : '🔊'}
+        </button>
+      )}
 
       {isCameraMode && (uiPhase === 'playing' || uiPhase === 'countdown') && (
         <TrackingPip

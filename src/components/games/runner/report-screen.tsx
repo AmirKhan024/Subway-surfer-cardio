@@ -191,6 +191,7 @@ export default function ReportScreen({
             sub={raw.controlScheme === 0 ? 'keyboard' : raw.controlScheme === 2 ? 'head' : 'body'}
           />
           <Stat label="Missed" value={String(raw.obstaclesFailed)} />
+          <Stat label="Coins" value={`◉ ${raw.coinsCollected}`} sub="fun only — not scored" />
           <Stat label="Time" value={`${(raw.elapsed / 1000).toFixed(0)}s`} />
         </div>
 

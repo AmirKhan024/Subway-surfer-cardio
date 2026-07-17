@@ -31,6 +31,7 @@ function makeRaw(overrides: Partial<RunnerRawData>): RunnerRawData {
     cleanFormRate: 0.7,
     controlScheme: 0,
     controlModeKeyboard: 1,
+    coinsCollected: 0,
     lowImpact: 0,
     assessmentValid: 1,
     seed: 1337,
@@ -216,6 +217,20 @@ describe('monotonicity', () => {
   it('gender never enters the scoring path (signature is (raw, age) only)', () => {
     // compile-time: computeKR1Score takes exactly raw + age
     expect(computeKR1Score.length).toBe(2);
+  });
+});
+
+// ── coins are engagement only — provably unscored ──────────────────────────
+
+describe('coins never affect the score', () => {
+  it('identical raw data with different coinsCollected → identical conditioned + musculage', () => {
+    for (const age of [25, 45, 68]) {
+      const zero = computeKR1Score(makeRaw({ coinsCollected: 0 }), age);
+      const many = computeKR1Score(makeRaw({ coinsCollected: 999 }), age);
+      expect(many.conditioned).toBe(zero.conditioned);
+      expect(many.musculage).toBe(zero.musculage);
+      expect(many.preCond).toBe(zero.preCond);
+    }
   });
 });
 

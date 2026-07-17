@@ -18,6 +18,8 @@ export interface HudState {
   lowImpact: boolean;
   /** head/neck control: cues read LOOK UP / LOOK DOWN */
   headMode?: boolean;
+  /** engagement only — never scored */
+  coins: number;
 }
 
 function Chip({ children }: { children: React.ReactNode }) {
@@ -82,6 +84,9 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
         </Chip>
         <Chip>
           {hud.cleared}/{hud.total}
+        </Chip>
+        <Chip>
+          <span className="text-amber-400">◉ {hud.coins}</span>
         </Chip>
         <Chip>Ctrl {hud.controlLabel}</Chip>
       </div>

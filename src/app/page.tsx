@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import StartScreen, { type RunnerProfile } from '@/components/games/runner/start-screen';
 import ReportScreen from '@/components/games/runner/report-screen';
+import GameOverScreen from '@/components/games/runner/gameover-screen';
 import { seedForAttempt } from '@/modules/game/engines/runner-timeline';
 import type { RunnerRawData } from '@/types/raw-data';
 import type { ControlMode } from '@/modules/game/engines/runner-engine';
@@ -30,7 +31,7 @@ const RunnerLayer = dynamic(() => import('@/components/games/runner/runner-layer
   ssr: false,
 });
 
-type Screen = 'start' | 'playing' | 'report';
+type Screen = 'start' | 'playing' | 'gameover' | 'report';
 
 /**
  * The end-of-run diagnostics artifact: one console group + the same object
@@ -143,7 +144,7 @@ export default function Home() {
     (raw: RunnerRawData) => {
       if (profile) emitRunReport(raw, profile, mode, attempt, debug);
       setLastRaw(raw);
-      setScreen('report');
+      setScreen('gameover'); // celebratory beat first; report follows
     },
     [profile, mode, attempt, debug],
   );
@@ -164,6 +165,16 @@ export default function Home() {
         onComplete={handleComplete}
         onExit={() => setScreen('start')}
         onFallbackKeyboard={() => setMode('keyboard')}
+      />
+    );
+  }
+
+  if (screen === 'gameover' && lastRaw) {
+    return (
+      <GameOverScreen
+        raw={lastRaw}
+        onSeeReport={() => setScreen('report')}
+        onRunAgain={handleRunAgain}
       />
     );
   }

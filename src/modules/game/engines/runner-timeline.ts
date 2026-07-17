@@ -9,7 +9,7 @@
  * so metrics stay comparable across seeds. The seed is recorded in
  * RunnerRawData for the audit trail.
  */
-import { COURSE } from '@/components/games/runner/runner-constants';
+import { COURSE, COIN } from '@/components/games/runner/runner-constants';
 
 export type ObstacleType = 'hurdle' | 'beam';
 
@@ -18,6 +18,13 @@ export interface Obstacle {
   type: ObstacleType;
   /** distance (meters from run start) of the action plane */
   atDistance: number;
+}
+
+export interface Coin {
+  id: number;
+  atDistance: number;
+  /** aerial coins sit above a hurdle and need jumpY >= COIN.AERIAL_JUMPY */
+  aerial: boolean;
 }
 
 /** Deterministic 32-bit PRNG (mulberry32). */
@@ -92,6 +99,40 @@ export function generateCourse(seed: number): Obstacle[] {
 /** Total course length in meters (last obstacle + a short run-out). */
 export function courseLength(obstacles: Obstacle[]): number {
   return obstacles[obstacles.length - 1].atDistance + 20;
+}
+
+/**
+ * Seeded coin placement — ENGAGEMENT ONLY (coins never enter the scoring
+ * bands). Ground lines of 3–5 coins fill the safe middle of each obstacle
+ * gap (≥ CLEARANCE_M from both planes so collecting never fights clearing),
+ * plus one aerial coin just past every hurdle that rewards a real jump.
+ * Separate PRNG stream (seed ^ 0x9e3779b9) so coin layout never perturbs
+ * the obstacle course for a given seed.
+ */
+export function generateCoins(seed: number, obstacles: Obstacle[]): Coin[] {
+  const rng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+  const coins: Coin[] = [];
+  let id = 0;
+
+  for (let i = 0; i < obstacles.length; i++) {
+    // aerial coin above/just past each hurdle
+    if (obstacles[i].type === 'hurdle') {
+      coins.push({ id: id++, atDistance: obstacles[i].atDistance + COIN.AERIAL_OFFSET_M, aerial: true });
+    }
+    // ground line in the gap AFTER this obstacle (before the next one)
+    const gapStart = obstacles[i].atDistance + COIN.CLEARANCE_M;
+    const gapEnd =
+      (i + 1 < obstacles.length ? obstacles[i + 1].atDistance : obstacles[i].atDistance + 18) -
+      COIN.CLEARANCE_M;
+    const lineLen = COIN.LINE_MIN + Math.floor(rng() * (COIN.LINE_MAX - COIN.LINE_MIN + 1));
+    const needed = (lineLen - 1) * COIN.LINE_SPACING_M;
+    if (gapEnd - gapStart < needed) continue; // gap too tight — skip cleanly
+    const start = gapStart + rng() * (gapEnd - gapStart - needed);
+    for (let c = 0; c < lineLen; c++) {
+      coins.push({ id: id++, atDistance: start + c * COIN.LINE_SPACING_M, aerial: false });
+    }
+  }
+  return coins;
 }
 
 /** Pick the seed for a given attempt number (0 = assessment run). */

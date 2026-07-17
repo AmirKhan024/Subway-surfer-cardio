@@ -116,6 +116,23 @@ export const COURSE = {
   SEED_POOL: [1337, 2861, 4242, 7351, 9090],
 } as const;
 
+// ── Coins (engagement ONLY — never enter the KR1 scoring bands) ──────────
+export const COIN = {
+  /** ground-line length range per obstacle gap */
+  LINE_MIN: 3,
+  LINE_MAX: 5,
+  /** coin spacing within a line, meters */
+  LINE_SPACING_M: 1.6,
+  /** keep every ground coin at least this far from any action plane */
+  CLEARANCE_M: 4,
+  /** aerial coin sits this far past each hurdle's plane */
+  AERIAL_OFFSET_M: 0.5,
+  /** game-space jumpY needed to grab an aerial coin */
+  AERIAL_JUMPY: 0.35,
+  /** visual spin, radians/second */
+  SPIN_RAD_S: 3,
+} as const;
+
 // ── Camera feel ──────────────────────────────────────────────────────────
 export const CAMERA = {
   /** standing eye height, meters (scene units) */

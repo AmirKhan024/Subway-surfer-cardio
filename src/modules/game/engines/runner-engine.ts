@@ -30,7 +30,13 @@ import type {
   HudMetrics,
 } from './types';
 import { LM } from './types';
-import { generateCourse, courseLength, type Obstacle } from './runner-timeline';
+import {
+  generateCourse,
+  generateCoins,
+  courseLength,
+  type Obstacle,
+  type Coin,
+} from './runner-timeline';
 import {
   DETECT,
   CALIB,
@@ -39,6 +45,7 @@ import {
   CAMERA,
   KEYBOARD,
   HEAD,
+  COIN,
   ASSESSMENT,
 } from '@/components/games/runner/runner-constants';
 import type { RunnerRawData } from '@/types/raw-data';
@@ -68,6 +75,13 @@ export interface SceneObstacle {
   cleared: boolean;
 }
 
+export interface SceneCoin {
+  id: number;
+  zAhead: number;
+  aerial: boolean;
+  collected: boolean;
+}
+
 /**
  * Diagnostic event emitted by the engine and drained by the layer (which
  * forwards to the browser logger). Keeps the engine pure — it never touches
@@ -90,6 +104,8 @@ export interface RunnerSceneState {
   hitFlashAt: number;
   cue: CueState | null;
   obstacles: SceneObstacle[];
+  coins: SceneCoin[];
+  coinsCollected: number;
   lowImpact: boolean;
   crouch: number;
   jumpY: number;
@@ -168,6 +184,13 @@ export class RunnerEngine implements GameEngine {
   private obstacles: Obstacle[] = [];
   private resolved: boolean[] = [];
   private clearedFlags: boolean[] = [];
+  // coins are ENGAGEMENT ONLY — they never feed the KR1 scoring bands
+  private coins: Coin[] = [];
+  /** plane crossed — no further checks (grabbed OR missed) */
+  private coinDone: boolean[] = [];
+  /** actually grabbed (scene plays the collect pop) */
+  private coinCollected: boolean[] = [];
+  private coinsCollected = 0;
   private distance = 0;
   private speed: number = COURSE.SPEED_START;
   private lives = COURSE.LIVES;
@@ -246,6 +269,10 @@ export class RunnerEngine implements GameEngine {
     this.obstacles = generateCourse(this.seed);
     this.resolved = this.obstacles.map(() => false);
     this.clearedFlags = this.obstacles.map(() => false);
+    this.coins = generateCoins(this.seed, this.obstacles);
+    this.coinDone = this.coins.map(() => false);
+    this.coinCollected = this.coins.map(() => false);
+    this.coinsCollected = 0;
     this.cueShownAt = this.obstacles.map(() => 0);
     this.reactionRecorded = this.obstacles.map(() => false);
     this.distance = 0;
@@ -521,6 +548,22 @@ export class RunnerEngine implements GameEngine {
       }
     }
 
+    // 3b. coins crossed this frame (ground auto-collect; aerial needs height)
+    for (let i = 0; i < this.coins.length; i++) {
+      if (this.coinDone[i]) continue;
+      const coin = this.coins[i];
+      if (prevDistance < coin.atDistance && this.distance >= coin.atDistance) {
+        this.coinDone[i] = true;
+        const grabbed = coin.aerial ? this.jumpY() >= COIN.AERIAL_JUMPY : true;
+        if (grabbed) {
+          this.coinCollected[i] = true;
+          this.coinsCollected += 1;
+          this.emit('COIN', { id: coin.id, aerial: coin.aerial, total: this.coinsCollected });
+        }
+        // missed aerial: just slides past the player, no pop
+      }
+    }
+
     // 4. cue for the nearest unresolved obstacle
     this.updateCue(timestampMs);
 
@@ -773,6 +816,8 @@ export class RunnerEngine implements GameEngine {
           this.squatState = 'active';
           this.squatPeak = this.crouch;
           this.recordReaction('squat', now);
+          // audio hook: REP fires at rep COMPLETION, too late for a sound
+          this.emit('SQUAT_START', { mode: this.controlMode });
         }
         break;
       case 'active':
@@ -1032,6 +1077,13 @@ export class RunnerEngine implements GameEngine {
         resolved: this.resolved[i],
         cleared: this.clearedFlags[i],
       })),
+      coins: this.coins.map((c, i) => ({
+        id: c.id,
+        zAhead: c.atDistance - this.distance,
+        aerial: c.aerial,
+        collected: this.coinCollected[i],
+      })),
+      coinsCollected: this.coinsCollected,
       lowImpact: this.lowImpact,
       crouch: this.crouch,
       jumpY: this.jumpY(),
@@ -1048,6 +1100,7 @@ export class RunnerEngine implements GameEngine {
       drifting: this.driftActive,
       cleared: this.clearedFlags.filter(Boolean).length,
       total: this.obstacles.length,
+      coins: this.coinsCollected,
     };
   }
 
@@ -1097,6 +1150,7 @@ export class RunnerEngine implements GameEngine {
         resolvedCount >= ASSESSMENT.MIN_OBSTACLES_RESOLVED
           ? 1
           : 0,
+      coinsCollected: this.coinsCollected,
       seed: this.seed,
       elapsed: finite(Math.round(elapsed)),
     };

@@ -12,7 +12,12 @@
  * pooling/positioning logic.
  */
 import * as THREE from 'three';
-import type { RunnerSceneState, SceneObstacle } from '@/modules/game/engines/runner-engine';
+import type {
+  RunnerSceneState,
+  SceneObstacle,
+  SceneCoin,
+} from '@/modules/game/engines/runner-engine';
+import { COIN } from './runner-constants';
 
 const HORIZON = 0xcfe8ff;
 const FOG_NEAR = 30;
@@ -29,6 +34,9 @@ export class RunnerScene {
   private clouds: THREE.Mesh[] = [];
   private props: { mesh: THREE.Object3D; baseZ: number }[] = [];
   private obstacleMeshes = new Map<number, THREE.Object3D>();
+  private coinMeshes = new Map<number, THREE.Object3D>();
+  /** collect-pop animations: coin id → pop start (ms) */
+  private coinPops = new Map<number, number>();
   private hitFlash!: THREE.Mesh;
   private lastFov = 0;
   private disposed = false;
@@ -190,8 +198,9 @@ export class RunnerScene {
       this.clouds[i].position.x += Math.sin(nowMs / 9000 + i) * 0.005;
     }
 
-    // obstacles
+    // obstacles + coins
     this.syncObstacles(state.obstacles);
+    this.syncCoins(state.coins, nowMs);
 
     // camera from engine outputs (never recomputed here)
     this.camera.position.y = state.cameraY;
@@ -226,6 +235,63 @@ export class RunnerScene {
           disposeObject(mesh);
         } else {
           mesh.position.z = -ob.zAhead;
+        }
+      }
+    }
+  }
+
+  private syncCoins(coins: SceneCoin[], nowMs: number): void {
+    for (const coin of coins) {
+      const inView = coin.zAhead > -5 && coin.zAhead < FOG_FAR;
+      const popping = this.coinPops.has(coin.id);
+      let mesh = this.coinMeshes.get(coin.id);
+
+      // a coin just got collected while visible → start its pop
+      if (coin.collected && mesh && !popping) {
+        this.coinPops.set(coin.id, nowMs);
+      }
+
+      const wanted = inView && (!coin.collected || this.coinPops.has(coin.id));
+      if (wanted && !mesh) {
+        if (coin.collected) continue; // collected before ever visible
+        mesh = makeCoin();
+        this.coinMeshes.set(coin.id, mesh);
+        this.scene.add(mesh);
+      }
+      if (!mesh) continue;
+
+      if (!wanted) {
+        this.scene.remove(mesh);
+        this.coinMeshes.delete(coin.id);
+        this.coinPops.delete(coin.id);
+        disposeObject(mesh);
+        continue;
+      }
+
+      mesh.position.z = -coin.zAhead;
+      mesh.position.y = coin.aerial ? 1.7 : 0.8;
+      mesh.rotation.y = (nowMs / 1000) * COIN.SPIN_RAD_S;
+
+      // collect pop: quick scale-out then remove
+      const popStart = this.coinPops.get(coin.id);
+      if (popStart !== undefined) {
+        const t = (nowMs - popStart) / 200;
+        if (t >= 1) {
+          this.scene.remove(mesh);
+          this.coinMeshes.delete(coin.id);
+          this.coinPops.delete(coin.id);
+          disposeObject(mesh);
+        } else {
+          const s = 1 + t * 0.8;
+          mesh.scale.set(s, s, s);
+          mesh.position.y += t * 0.5;
+          mesh.traverse((o) => {
+            const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+            if (m && 'opacity' in m) {
+              m.transparent = true;
+              m.opacity = 1 - t;
+            }
+          });
         }
       }
     }
@@ -354,6 +420,22 @@ export function makeBeam(): THREE.Object3D {
     post.position.set(side * ROAD_W * 0.44, 0.72, 0);
     group.add(post);
   }
+  return group;
+}
+
+/** Spinning collectible: gold ring + inner disc, amber muscle-glow. */
+export function makeCoin(): THREE.Object3D {
+  const group = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.28, 0.07, 8, 20),
+    new THREE.MeshBasicMaterial({ color: 0xf59e0b }),
+  );
+  group.add(ring);
+  const disc = new THREE.Mesh(
+    new THREE.CircleGeometry(0.2, 16),
+    new THREE.MeshBasicMaterial({ color: 0xfbbf24, side: THREE.DoubleSide }),
+  );
+  group.add(disc);
   return group;
 }
 

@@ -49,6 +49,9 @@ export interface RunnerRawData {
   /** 1 = enough activity for an assessment-grade score
    *  (>= 6 total reps AND >= 8 obstacles resolved). */
   assessmentValid: 0 | 1;
+  /** ENGAGEMENT ONLY — coins never enter the KR1/KR1N scoring bands or
+   *  musculage (kr1-local.ts must never reference this). */
+  coinsCollected: number;
   /** Course seed used for this run (comparability audit trail). */
   seed: number;
   /** ms */
