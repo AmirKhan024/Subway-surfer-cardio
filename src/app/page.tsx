@@ -10,7 +10,9 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
-import StartScreen, { type RunnerProfile } from '@/components/games/runner/start-screen';
+import HomeScreen from '@/components/games/runner/home-screen';
+import SetupScreen from '@/components/games/runner/setup-screen';
+import type { PlayMode, RunnerProfile } from '@/components/games/runner/profile';
 import ReportScreen from '@/components/games/runner/report-screen';
 import GameOverScreen from '@/components/games/runner/gameover-screen';
 import { seedForAttempt } from '@/modules/game/engines/runner-timeline';
@@ -32,7 +34,7 @@ const RunnerLayer = dynamic(() => import('@/components/games/runner/runner-layer
   ssr: false,
 });
 
-type Screen = 'start' | 'playing' | 'gameover' | 'report';
+type Screen = 'home' | 'setup' | 'playing' | 'gameover' | 'report';
 
 /**
  * The end-of-run diagnostics artifact: one console group + the same object
@@ -121,9 +123,9 @@ function emitRunReport(
 }
 
 export default function Home() {
-  const [screen, setScreen] = useState<Screen>('start');
+  const [screen, setScreen] = useState<Screen>('home');
   const [profile, setProfile] = useState<RunnerProfile | null>(null);
-  const [mode, setMode] = useState<ControlMode>('keyboard');
+  const [mode, setMode] = useState<PlayMode>('pose');
   const [attempt, setAttempt] = useState(0);
   const [lastRaw, setLastRaw] = useState<RunnerRawData | null>(null);
   const [debug] = useState(
@@ -135,7 +137,14 @@ export default function Home() {
     klog('BOOT', { version: APP_VERSION });
   }, []);
 
-  const handlePlay = useCallback((p: RunnerProfile, m: ControlMode) => {
+  const handleSelectMode = useCallback((m: PlayMode) => {
+    setMode(m);
+    setScreen('setup');
+  }, []);
+
+  const goHome = useCallback(() => setScreen('home'), []);
+
+  const handlePlay = useCallback((p: RunnerProfile, m: PlayMode) => {
     preloadCueImages(m); // decode cue icons before the layer mounts; HUD falls back to arrows if not ready
     setProfile(p);
     setMode(m);
@@ -156,6 +165,15 @@ export default function Home() {
     setScreen('playing');
   }, []);
 
+  // subtle premium fade between screens; keyed so it replays per navigation.
+  // The playing screen is NOT wrapped — the transform would break its
+  // fixed-position children.
+  const wrap = (node: React.ReactNode) => (
+    <div key={screen} className="motion-safe:animate-screen-in">
+      {node}
+    </div>
+  );
+
   if (screen === 'playing' && profile) {
     return (
       <RunnerLayer
@@ -165,35 +183,38 @@ export default function Home() {
         bobScale={profile.bobScale}
         debug={debug}
         onComplete={handleComplete}
-        onExit={() => setScreen('start')}
-        onFallbackKeyboard={() => {
-          preloadCueImages('keyboard'); // head→keyboard fallback needs the Body icon set
-          setMode('keyboard');
-        }}
+        onExit={() => setScreen('setup')}
       />
     );
   }
 
   if (screen === 'gameover' && lastRaw) {
-    return (
+    return wrap(
       <GameOverScreen
         raw={lastRaw}
         onSeeReport={() => setScreen('report')}
         onRunAgain={handleRunAgain}
-      />
+        onHome={goHome}
+        debug={debug}
+      />,
     );
   }
 
   if (screen === 'report' && lastRaw && profile) {
-    return (
+    return wrap(
       <ReportScreen
         raw={lastRaw}
         age={profile.age}
         onRunAgain={handleRunAgain}
-        onChangeSettings={() => setScreen('start')}
-      />
+        onHome={goHome}
+        debug={debug}
+      />,
     );
   }
 
-  return <StartScreen onPlay={handlePlay} />;
+  if (screen === 'setup') {
+    return wrap(<SetupScreen mode={mode} onPlay={handlePlay} onBack={goHome} />);
+  }
+
+  return wrap(<HomeScreen onSelectMode={handleSelectMode} />);
 }

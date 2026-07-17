@@ -5,15 +5,20 @@
  * Mobility musculage: the runner drives engagement + its own score card;
  * calibrated assessments stay the clinical source of truth — SPEC §9.6).
  *
- * Hero = musculage from the local KR1 scoring mirror. Conditioned can
- * legally exceed 1.0 (older cohorts get >1.0 age factors) — the % display
- * caps at 100.
+ * Retention-first layout: animated Muscle-Age ring hero, one age-comparison
+ * bar, a small friendly stat row. The ring fill is min(1, age/musculage) —
+ * NOT the raw score — so a younger-than-age result reads as a full emerald
+ * ring and an older one as a visibly emptier amber ring. Conditioned can
+ * legally exceed 1.0 (older cohorts get >1.0 age factors) — the score
+ * display caps at 100. Diagnostics widgets render only under ?debug=1.
  */
 import { useEffect, useState } from 'react';
 import type { RunnerRawData } from '@/types/raw-data';
 import { computeKR1Score, type KR1ScoreResult } from '@/lib/scoring/kr1-local';
-import { HEAD } from './runner-constants';
 import { CopyDiagnosticsButton, LogsPanel } from './diagnostics-widgets';
+import ProgressRing from './progress-ring';
+import { BackButton, MuteButton } from './screen-chrome';
+import { useAnimatedProgress } from './use-animated-progress';
 
 interface RunRecord {
   musculage: number;
@@ -54,20 +59,78 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
+/**
+ * One horizontal track with both ages as labeled markers. Minimum span of
+ * 12 years so near-equal values still read as two distinct markers; the
+ * markers themselves sit at their true positions.
+ */
+function AgeBar({ age, musculage, better }: { age: number; musculage: number; better: boolean }) {
+  const span = Math.max(12, Math.abs(age - musculage) + 16);
+  const mid = (age + musculage) / 2;
+  let lo = mid - span / 2;
+  let hi = mid + span / 2;
+  // shift (not shrink) when the window runs past the valid age range
+  if (lo < 5) {
+    hi += 5 - lo;
+    lo = 5;
+  }
+  if (hi > 110) {
+    lo = Math.max(5, lo - (hi - 110));
+    hi = 110;
+  }
+  const pos = (v: number) => `${((v - lo) / (hi - lo)) * 100}%`;
+  const accent = better ? 'bg-emerald-400 ring-emerald-400/30' : 'bg-amber-400 ring-amber-400/30';
+
+  const diff = age - musculage;
+  const caption =
+    diff > 0
+      ? `Your muscles move like someone ${diff} years younger 💪`
+      : diff === 0
+        ? 'Your muscles match your age.'
+        : `Your muscles move like a ${musculage}-year-old.`;
+
+  return (
+    <div className="mt-6">
+      <div className="relative mx-2 mb-8 mt-8 h-2 rounded-full bg-slate-800">
+        <div className="absolute -translate-x-1/2" style={{ left: pos(age) }}>
+          <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] text-slate-400">
+            You · {age}
+          </div>
+          <div className="mt-[-2px] h-3 w-3 rounded-full bg-slate-400" />
+        </div>
+        <div className="absolute -translate-x-1/2" style={{ left: pos(musculage) }}>
+          <div className={`mt-[-4px] h-4 w-4 rounded-full ring-4 ${accent}`} />
+          <div className="absolute left-1/2 top-4 -translate-x-1/2 whitespace-nowrap text-[11px] font-semibold text-slate-200">
+            Muscle · {musculage}
+          </div>
+        </div>
+      </div>
+      <p className="text-center text-sm text-slate-300">{caption}</p>
+    </div>
+  );
+}
+
 export default function ReportScreen({
   raw,
   age,
   onRunAgain,
-  onChangeSettings,
+  onHome,
+  debug = false,
 }: {
   raw: RunnerRawData;
   age: number;
   onRunAgain: () => void;
-  onChangeSettings: () => void;
+  onHome: () => void;
+  debug?: boolean;
 }) {
   const [score, setScore] = useState<KR1ScoreResult | null>(null);
   const [deltaMusculage, setDeltaMusculage] = useState<number | null>(null);
   const [personalBest, setPersonalBest] = useState(false);
+  const [reducedMotion] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+  );
 
   useEffect(() => {
     const s = computeKR1Score(raw, age);
@@ -90,17 +153,24 @@ export default function ReportScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const t = useAnimatedProgress(1200, reducedMotion || !score || score.incomplete);
+
   if (!score) return null;
 
   const finished = raw.obstaclesCleared + raw.obstaclesFailed >= raw.obstaclesTotal;
   const conditionedPct = Math.min(100, Math.round(score.conditioned * 100));
-  // KR1N = head/neck-ROM run: present neck ranges, never squat/jump labels
+  // KR1N = head/neck-ROM run: present neck labels, never squat/jump labels
   const isHeadRun = raw.testId === 'KR1N';
-  const flexPct = Math.round((raw.avgNeckFlexion / HEAD.FLEX_CLEAN) * 100);
-  const extPct = Math.round((raw.avgNeckExtension / HEAD.EXT_CLEAN) * 100);
+  const better = score.musculage <= age;
+  const heroColor = better ? '#34d399' : '#f59e0b';
+  // younger/equal → full ring; older → progressively emptier (NOT the score:
+  // a 90/100 score can still mean "older than you" and must not look full)
+  const ringFraction = Math.min(1, age / score.musculage);
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
+    <main className="relative flex min-h-screen items-center justify-center p-4">
+      <BackButton onClick={onHome} />
+      <MuteButton />
       <div className="w-full max-w-md rounded-glass border border-white/10 bg-surface p-7 shadow-glass">
         <div className="flex items-baseline justify-between">
           <h1 className="font-heading text-2xl font-bold text-slate-50">
@@ -111,7 +181,7 @@ export default function ReportScreen({
           </span>
         </div>
 
-        {/* musculage hero */}
+        {/* muscle-age hero */}
         {score.incomplete ? (
           <div className="mt-5 rounded-2xl border border-white/10 bg-slate-900/60 p-5 text-center">
             <div className="text-sm text-slate-300">
@@ -119,15 +189,15 @@ export default function ReportScreen({
             </div>
           </div>
         ) : (
-          <div className="mt-5 rounded-2xl border border-cyan-500/20 bg-gradient-to-b from-cyan-500/10 to-transparent p-5 text-center">
-            <div className="text-[11px] uppercase tracking-widest text-slate-400">
-              Runner muscle age
-            </div>
-            <div className="mt-1 font-heading text-6xl font-black text-slate-50">
-              {score.musculage}
-            </div>
-            <div className="mt-1 text-sm text-slate-400">
-              score {conditionedPct}/100 · you are {age}
+          <div className="mt-6">
+            <ProgressRing fraction={t * ringFraction} color={heroColor}>
+              <div className="text-[11px] uppercase tracking-widest text-slate-400">Muscle age</div>
+              <div className="font-heading text-6xl font-black text-slate-50">
+                {Math.round(t * score.musculage)}
+              </div>
+            </ProgressRing>
+            <div className="mt-2 text-center text-sm text-slate-400">
+              Score {conditionedPct} · You are {age}
             </div>
             <div className="mt-2 flex items-center justify-center gap-2 text-xs">
               {personalBest && (
@@ -147,45 +217,35 @@ export default function ReportScreen({
                 </span>
               )}
             </div>
+            <AgeBar age={age} musculage={score.musculage} better={better} />
           </div>
         )}
 
-        <p className="mt-3 text-center text-sm text-slate-400">
+        <p className="mt-4 text-center text-sm text-slate-400">
           {raw.obstaclesCleared}/{raw.obstaclesTotal} obstacles · {Math.round(raw.distance)}m
         </p>
 
         <div className="mt-4 grid grid-cols-3 gap-2">
           {isHeadRun ? (
             <>
-              <Stat label="Look-downs" value={String(raw.squatReps)} sub={`range ${flexPct}% of target`} />
-              <Stat label="Look-ups" value={String(raw.jumpReps)} sub={`range ${extPct}% of target`} />
+              <Stat label="Look-downs" value={String(raw.squatReps)} />
+              <Stat label="Look-ups" value={String(raw.jumpReps)} />
             </>
           ) : (
             <>
-              <Stat label="Squats" value={String(raw.squatReps)} sub={`avg depth ${(raw.avgSquatDepth * 100).toFixed(0)}%`} />
-              <Stat
-                label={raw.lowImpact ? 'Heel raises' : 'Jumps'}
-                value={String(raw.jumpReps)}
-                sub={`avg height ${(raw.avgJumpHeight * 100).toFixed(0)}%`}
-              />
+              <Stat label="Squats" value={String(raw.squatReps)} />
+              <Stat label="Jumps" value={String(raw.jumpReps)} />
             </>
           )}
           <Stat label="Clean form" value={`${(raw.cleanFormRate * 100).toFixed(0)}%`} />
           <Stat
             label="Reaction"
             value={`${raw.avgReactionMs}ms`}
-            sub={raw.controlScheme === 0 ? 'keyboard' : raw.controlScheme === 2 ? 'head' : 'body'}
+            sub="How fast you moved after the cue."
           />
-          <Stat label="Missed" value={String(raw.obstaclesFailed)} />
-          <Stat label="Coins" value={`◉ ${raw.coinsCollected}`} sub="fun only — not scored" />
           <Stat label="Time" value={`${(raw.elapsed / 1000).toFixed(0)}s`} />
+          <Stat label="Coins" value={`◉ ${raw.coinsCollected}`} sub="fun only" />
         </div>
-
-        <p className="mt-4 text-center text-xs text-slate-500">
-          {isHeadRun
-            ? 'head/neck movement range (relative) → neck mobility · timing → reflex'
-            : 'squat depth → mobility · jump power → strength · timing → reflex'}
-        </p>
 
         {raw.assessmentValid === 0 && !score.incomplete && (
           <p className="mt-3 rounded-lg border border-white/10 bg-slate-900/60 px-3 py-2 text-center text-xs text-slate-400">
@@ -201,17 +261,19 @@ export default function ReportScreen({
             Run again
           </button>
           <button
-            onClick={onChangeSettings}
-            className="rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold text-slate-200"
+            onClick={onHome}
+            className="rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold text-slate-200 transition hover:bg-white/5"
           >
-            Settings
+            Home
           </button>
         </div>
 
-        <div className="mt-3">
-          <CopyDiagnosticsButton />
-          <LogsPanel />
-        </div>
+        {debug && (
+          <div className="mt-3">
+            <CopyDiagnosticsButton />
+            <LogsPanel />
+          </div>
+        )}
 
         <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-center text-xs text-amber-200">
           ⚠️ Avoid if you have active pain. Consult a physician first.

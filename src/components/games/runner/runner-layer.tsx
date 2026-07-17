@@ -16,8 +16,8 @@ import { RunnerEngine, type ControlMode } from '@/modules/game/engines/runner-en
 import type { RunnerRawData } from '@/types/raw-data';
 import type { PoseLandmarks } from '@/modules/pose/types';
 import type { CalibrationStatus } from '@/modules/game/engines/types';
+import { Volume2, VolumeX, X } from 'lucide-react';
 import { RunnerScene } from './runner-scene';
-import { attachKeyboard } from './keyboard-input';
 import RunnerHUD, { type HudState } from './runner-hud';
 import { useCamera } from '@/lib/mediapipe/use-camera';
 import { usePoseDetector } from '@/lib/mediapipe/use-pose';
@@ -54,7 +54,6 @@ export interface RunnerLayerProps {
   debug?: boolean;
   onComplete: (raw: RunnerRawData) => void;
   onExit: () => void;
-  onFallbackKeyboard?: () => void;
 }
 
 export default function RunnerLayer({
@@ -65,7 +64,6 @@ export default function RunnerLayer({
   debug = false,
   onComplete,
   onExit,
-  onFallbackKeyboard,
 }: RunnerLayerProps) {
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -92,7 +90,10 @@ export default function RunnerLayer({
   const [tracking, setTracking] = useState(true);
   const [drifting, setDrifting] = useState(false);
   const [poseError, setPoseError] = useState<string | null>(null);
+  /** bump to re-run the camera/pose boot effect after a failure */
+  const [retryNonce, setRetryNonce] = useState(0);
   const [muted, setMuted] = useState(() => audioManager.isMuted());
+  const [confirmExit, setConfirmExit] = useState(false);
 
   const toggleMute = useCallback(() => {
     const next = !audioManager.isMuted();
@@ -145,7 +146,7 @@ export default function RunnerLayer({
       camera.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controlMode]);
+  }, [controlMode, retryNonce]);
 
   // surface pose hook init errors too
   useEffect(() => {
@@ -193,11 +194,6 @@ export default function RunnerLayer({
       return;
     }
     sceneRef.current = scene;
-
-    const detachKb =
-      controlMode === 'keyboard'
-        ? attachKeyboard(window, (i) => engine.setControlInput(i))
-        : () => {};
 
     setPhase(controlMode === 'keyboard' ? 'countdown' : 'calibrating');
     if (controlMode === 'keyboard') countdownEndRef.current = performance.now() + 3000;
@@ -275,8 +271,6 @@ export default function RunnerLayer({
           lives: s.lives,
           cleared: (m.cleared as number) ?? 0,
           total: (m.total as number) ?? 0,
-          controlLabel:
-            controlMode === 'keyboard' ? 'Keys' : controlMode === 'head' ? 'Head' : 'Body',
           cue: s.cue,
           lowImpact: s.lowImpact,
           headMode: controlMode === 'head',
@@ -315,7 +309,6 @@ export default function RunnerLayer({
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
-      detachKb();
       audioManager.stopMusic();
       scene.dispose();
       sceneRef.current = null;
@@ -340,15 +333,49 @@ export default function RunnerLayer({
 
       {hud && uiPhase === 'playing' && <RunnerHUD hud={hud} />}
 
-      {/* mute chip — usable mid-run */}
+      {/* mute + exit chips — usable mid-run */}
       {(uiPhase === 'playing' || uiPhase === 'countdown') && (
-        <button
-          onClick={toggleMute}
-          className="absolute bottom-10 right-3 z-30 rounded-xl border border-white/15 bg-slate-950/60 px-3 py-1.5 text-sm text-slate-50 backdrop-blur-md"
-          aria-label={muted ? 'Unmute' : 'Mute'}
-        >
-          {muted ? '🔇' : '🔊'}
-        </button>
+        <div className="absolute bottom-10 right-3 z-30 flex gap-2">
+          <button
+            onClick={toggleMute}
+            className="rounded-xl border border-white/15 bg-slate-950/60 p-2 text-slate-50 backdrop-blur-md"
+            aria-label={muted ? 'Unmute' : 'Mute'}
+          >
+            {muted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+          </button>
+          <button
+            onClick={() => setConfirmExit(true)}
+            className="rounded-xl border border-white/15 bg-slate-950/60 p-2 text-slate-50 backdrop-blur-md"
+            aria-label="Leave the run"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+      )}
+
+      {/* exit confirm — the run KEEPS going behind this (the engine runs on
+          wall-clock time; a true pause would need engine changes) */}
+      {confirmExit && uiPhase !== 'done' && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/70 p-6 backdrop-blur-sm">
+          <div className="w-full max-w-xs rounded-glass border border-white/10 bg-surface p-6 text-center">
+            <h3 className="font-heading text-xl font-bold text-slate-50">Leave the run?</h3>
+            <p className="mt-2 text-sm text-slate-300">Your progress won&apos;t be saved.</p>
+            <div className="mt-5 flex justify-center gap-3">
+              <button
+                onClick={() => setConfirmExit(false)}
+                className="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950"
+              >
+                Resume
+              </button>
+              <button
+                onClick={onExit}
+                className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-200"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* NOTE: the in-play camera PiP was removed (mobile UX) — the tracking
@@ -423,24 +450,25 @@ export default function RunnerLayer({
         </div>
       )}
 
-      {/* pose failure → keyboard fallback */}
+      {/* pose failure → retry or back */}
       {poseError && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/85 p-6">
           <div className="max-w-sm rounded-glass border border-white/10 bg-surface p-6 text-center">
             <h3 className="font-heading text-xl font-bold text-slate-50">Camera unavailable</h3>
             <p className="mt-2 text-sm text-slate-300">{poseError}</p>
             <p className="mt-2 text-xs text-slate-400">
-              Body control needs camera permission and internet (first run) for the pose model.
+              The game needs camera permission and internet (first run) for the pose model.
             </p>
             <div className="mt-5 flex justify-center gap-3">
-              {onFallbackKeyboard && (
-                <button
-                  onClick={onFallbackKeyboard}
-                  className="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950"
-                >
-                  Play with keyboard
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  setPoseError(null);
+                  setRetryNonce((n) => n + 1);
+                }}
+                className="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950"
+              >
+                Retry
+              </button>
               <button
                 onClick={onExit}
                 className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-200"

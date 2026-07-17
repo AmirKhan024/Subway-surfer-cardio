@@ -72,11 +72,16 @@ const config: Config = {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.5' },
         },
+        screenIn: {
+          '0%': { opacity: '0', transform: 'translateY(6px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
       },
       animation: {
         'fade-up': 'fadeUp 0.5s ease-out',
         'slide-in': 'slideIn 0.3s ease-out',
         pulse: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+        'screen-in': 'screenIn 0.35s ease-out',
       },
     },
   },

@@ -15,7 +15,6 @@ export interface HudState {
   lives: number;
   cleared: number;
   total: number;
-  controlLabel: string;
   cue: CueState | null;
   lowImpact: boolean;
   /** head/neck control: cues read LOOK UP / LOOK DOWN */
@@ -96,7 +95,6 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
         <Chip>
           <span className="text-amber-400">◉ {hud.coins}</span>
         </Chip>
-        <Chip>Ctrl {hud.controlLabel}</Chip>
       </div>
 
       {/* center-top action cue */}

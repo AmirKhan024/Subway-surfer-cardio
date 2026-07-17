@@ -1,33 +1,32 @@
 'use client';
 
 /**
- * How-to-play — start-screen demo panel with Body/Neck toggle chips.
+ * How-to-play — the chosen mode's demo video + a one-line layman caption.
+ * Revealed on demand from the setup screen (mode is already picked, so no
+ * tabs). Never gates Start or any game state.
  *
  * iOS-safe autoplay: muted + playsInline + autoplay together, plus an
- * imperative el.muted = true (React can drop the attribute). The poster is
- * a wide instructional split-image with text labels, so it renders as its
- * own object-contain layer UNDER the video (a poster attribute inside
- * <video> would inherit the video's object-cover and crop the labels);
- * before the first frame the video element is transparent, so the poster
- * shows through instantly. Any video failure (error, blocked autoplay,
- * Low-Power Mode, reduced-motion) leaves the poster — never a blank box.
- *
- * Nothing here gates the CTAs or any game state.
+ * imperative el.muted = true (React can drop the attribute). The video is
+ * object-contain (letterboxed on the dark fill) so the full jump arc and
+ * the labels baked into the frame are never cropped. The instructional
+ * poster renders as its own object-contain layer under the video and fades
+ * out once real frames are playing (a contain-fit video no longer covers
+ * it); any failure (error, blocked autoplay, Low-Power Mode,
+ * reduced-motion) leaves the poster — never a blank box.
  */
 import { useEffect, useRef, useState } from 'react';
 import { preloadCueImages } from '@/lib/media/cue-preloader';
 import { MODE_MEDIA } from '@/lib/media/mode-media';
+import type { PlayMode } from './profile';
 
-type Tab = 'pose' | 'head';
+const CAPTION: Record<PlayMode, string> = {
+  pose: 'Jump over hurdles. Squat under the beams.',
+  head: 'Look up to jump. Look down to squat.',
+};
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'pose', label: 'Body & Keyboard' },
-  { id: 'head', label: 'Neck' },
-];
-
-export default function HowToPlay() {
-  const [tab, setTab] = useState<Tab>('pose');
+export default function HowToPlay({ mode }: { mode: PlayMode }) {
   const [videoFailed, setVideoFailed] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -37,10 +36,10 @@ export default function HowToPlay() {
     }
   }, []);
 
-  // warm the revealed mode's cue icons early (deduped; handlePlay re-fires harmlessly)
+  // warm the mode's cue icons (deduped; setup/handlePlay re-fires harmlessly)
   useEffect(() => {
-    preloadCueImages(tab);
-  }, [tab]);
+    preloadCueImages(mode);
+  }, [mode]);
 
   const showVideo = !reducedMotion && !videoFailed;
 
@@ -56,49 +55,26 @@ export default function HowToPlay() {
       cancelled = true; // ignore the pause-interrupt AbortError + unmount race
       el.pause();
     };
-  }, [tab, showVideo]);
+  }, [mode, showVideo]);
 
-  const media = MODE_MEDIA[tab];
+  const media = MODE_MEDIA[mode];
 
   return (
-    <div className="mt-5">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-widest text-slate-400">
-          How to play
-        </span>
-        <div className="flex gap-1.5">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              aria-pressed={tab === t.id}
-              onClick={() => {
-                setTab(t.id);
-                setVideoFailed(false);
-              }}
-              className={`rounded-xl border px-2.5 py-1 text-xs font-semibold transition-colors ${
-                tab === t.id
-                  ? 'border-cyan-400/40 bg-cyan-500/20 text-cyan-100'
-                  : 'border-white/15 bg-slate-900/60 text-slate-300 hover:border-white/30'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="relative mt-2 aspect-video overflow-hidden rounded-xl border border-white/10 bg-slate-900">
-        {/* instructional poster: object-contain so its text labels never crop */}
+    <div>
+      <div className="relative aspect-video overflow-hidden rounded-xl border border-white/10 bg-slate-900">
+        {/* instructional poster: object-contain so its text labels never crop;
+            fades out once the (also contain-fit) video is actually painting */}
         <img
           src={media.poster}
           alt=""
           draggable={false}
-          className="absolute inset-0 h-full w-full object-contain"
+          className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${
+            showVideo && playing ? 'opacity-0' : 'opacity-100'
+          }`}
         />
         {showVideo && (
           <video
-            key={tab} // full remount on toggle: clean src swap, no stale play() promise
+            key={mode} // clean remount on mode change: no stale play() promise
             ref={videoRef}
             src={media.demo}
             autoPlay
@@ -108,11 +84,16 @@ export default function HowToPlay() {
             preload="auto"
             disablePictureInPicture
             aria-hidden
-            onError={() => setVideoFailed(true)}
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+            onPlaying={() => setPlaying(true)}
+            onError={() => {
+              setPlaying(false);
+              setVideoFailed(true);
+            }}
+            className="pointer-events-none absolute inset-0 h-full w-full object-contain"
           />
         )}
       </div>
+      <p className="mt-2 text-center text-sm text-slate-300">{CAPTION[mode]}</p>
     </div>
   );
 }
