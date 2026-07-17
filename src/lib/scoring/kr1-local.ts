@@ -14,7 +14,9 @@ import type { RunnerRawData } from '@/types/raw-data';
 import { MATRIX_70_30, getAgeNormFactor } from './kr1-matrices';
 
 export interface KR1ScoreResult {
-  testId: 'KR1';
+  /** KR1N (head/neck runner, ROM category) scores through the SAME X/Y
+   *  pipeline — cleanFormRate there reflects comfortable neck-ROM adequacy. */
+  testId: 'KR1' | 'KR1N';
   preCond: number;
   ageFactor: number;
   /** 0..~1.2 — CAN exceed 1.0 (older cohorts get >1 factors). Cap at 100%
@@ -64,7 +66,7 @@ export function isIncompleteRun(raw: Pick<RunnerRawData, 'squatReps' | 'jumpReps
 export function computeKR1Score(raw: RunnerRawData, age: number): KR1ScoreResult {
   if (isIncompleteRun(raw)) {
     return {
-      testId: 'KR1',
+      testId: raw.testId,
       preCond: 0,
       ageFactor: 0,
       conditioned: 0,
@@ -85,7 +87,7 @@ export function computeKR1Score(raw: RunnerRawData, age: number): KR1ScoreResult
   const musculage = conditioned > 0 ? Math.round(age / conditioned) : age * 3;
 
   return {
-    testId: 'KR1',
+    testId: raw.testId,
     preCond,
     ageFactor,
     conditioned,

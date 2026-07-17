@@ -73,6 +73,9 @@ export default function RunnerLayer({
 
   const camera = useCamera();
   const pose = usePoseDetector();
+  // head mode is a camera mode too — only keyboard skips the camera stack
+  const isCameraMode = controlMode !== 'keyboard';
+  const isHead = controlMode === 'head';
 
   const setPhase = useCallback((p: UiPhase) => {
     phaseRef.current = p;
@@ -80,9 +83,9 @@ export default function RunnerLayer({
     klog('PHASE', { phase: p });
   }, []);
 
-  // ── pose boot (body-control mode only) ─────────────────────────────────
+  // ── pose boot (any camera mode: body or head) ──────────────────────────
   useEffect(() => {
-    if (controlMode !== 'pose') return;
+    if (controlMode === 'keyboard') return;
     let cancelled = false;
     (async () => {
       try {
@@ -217,9 +220,11 @@ export default function RunnerLayer({
           lives: s.lives,
           cleared: (m.cleared as number) ?? 0,
           total: (m.total as number) ?? 0,
-          controlLabel: controlMode === 'keyboard' ? 'Keys' : 'Body',
+          controlLabel:
+            controlMode === 'keyboard' ? 'Keys' : controlMode === 'head' ? 'Head' : 'Body',
           cue: s.cue,
           lowImpact: s.lowImpact,
+          headMode: controlMode === 'head',
         });
         const trackingNow =
           engine.isTracking() && (controlMode === 'keyboard' || now - lastSeenAtRef.current < 700);
@@ -278,7 +283,7 @@ export default function RunnerLayer({
 
       {hud && uiPhase === 'playing' && <RunnerHUD hud={hud} />}
 
-      {controlMode === 'pose' && (uiPhase === 'playing' || uiPhase === 'countdown') && (
+      {isCameraMode && (uiPhase === 'playing' || uiPhase === 'countdown') && (
         <TrackingPip
           videoRef={videoRef}
           landmarksRef={latestLandmarksRef}
@@ -290,9 +295,13 @@ export default function RunnerLayer({
       {/* calibration overlay */}
       {uiPhase === 'calibrating' && !poseError && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/70 p-6 text-center backdrop-blur-sm">
-          <h2 className="font-heading text-2xl font-bold text-slate-50">Stand back</h2>
+          <h2 className="font-heading text-2xl font-bold text-slate-50">
+            {isHead ? 'Get comfortable' : 'Stand back'}
+          </h2>
           <p className="mt-1 max-w-sm text-sm text-slate-300">
-            Get your full body in frame — head to feet. Hold still.
+            {isHead
+              ? 'Sit tall, chin level, look straight at the screen. Hold still.'
+              : 'Get your full body in frame — head to feet. Hold still.'}
           </p>
           <div className="relative mt-6 h-28 w-28">
             <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">

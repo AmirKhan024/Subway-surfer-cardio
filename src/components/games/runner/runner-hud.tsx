@@ -16,6 +16,8 @@ export interface HudState {
   controlLabel: string;
   cue: CueState | null;
   lowImpact: boolean;
+  /** head/neck control: cues read LOOK UP / LOOK DOWN */
+  headMode?: boolean;
 }
 
 function Chip({ children }: { children: React.ReactNode }) {
@@ -26,10 +28,26 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function ActionCue({ cue, lowImpact }: { cue: CueState; lowImpact: boolean }) {
+export function ActionCue({
+  cue,
+  lowImpact,
+  headMode = false,
+}: {
+  cue: CueState;
+  lowImpact: boolean;
+  headMode?: boolean;
+}) {
   const isJump = cue.type === 'hurdle';
   const color = isJump ? COLORS.jump : COLORS.squat;
-  const label = isJump ? (lowImpact ? 'HEEL RAISE' : 'JUMP') : 'SQUAT';
+  const label = isJump
+    ? headMode
+      ? 'LOOK UP'
+      : lowImpact
+        ? 'HEEL RAISE'
+        : 'JUMP'
+    : headMode
+      ? 'LOOK DOWN'
+      : 'SQUAT';
   const icon = isJump ? '⬆' : '⬇';
   return (
     <div className="flex flex-col items-center gap-1.5 transition-opacity duration-150">
@@ -71,7 +89,7 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
       {/* center-top action cue */}
       {hud.cue && (
         <div className="absolute left-1/2 top-16 -translate-x-1/2">
-          <ActionCue cue={hud.cue} lowImpact={hud.lowImpact} />
+          <ActionCue cue={hud.cue} lowImpact={hud.lowImpact} headMode={hud.headMode} />
         </div>
       )}
 

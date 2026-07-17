@@ -41,7 +41,7 @@ export function saveProfile(p: RunnerProfile): void {
 export default function StartScreen({
   onPlay,
 }: {
-  onPlay: (profile: RunnerProfile, mode: 'keyboard' | 'pose') => void;
+  onPlay: (profile: RunnerProfile, mode: 'keyboard' | 'pose' | 'head') => void;
 }) {
   const [age, setAge] = useState<string>('35');
   const [gender, setGender] = useState<RunnerProfile['gender']>('male');
@@ -60,7 +60,7 @@ export default function StartScreen({
     }
   }, []);
 
-  const start = (mode: 'keyboard' | 'pose') => {
+  const start = (mode: 'keyboard' | 'pose' | 'head') => {
     const parsed = Math.round(Number(age));
     const validAge = Number.isFinite(parsed) && parsed >= 5 && parsed <= 110 ? parsed : 35;
     const profile: RunnerProfile = { age: validAge, gender, lowImpact, bobScale };
@@ -136,12 +136,25 @@ export default function StartScreen({
             🎥 Body control (camera)
           </button>
           <button
+            onClick={() => start('head')}
+            className="rounded-xl border border-cyan-400/40 bg-cyan-500/10 px-5 py-3 font-heading font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
+          >
+            🙂 Head / neck control (camera, works seated)
+          </button>
+          <button
             onClick={() => start('keyboard')}
             className="rounded-xl border border-white/20 px-5 py-3 font-heading font-semibold text-slate-100 transition hover:bg-white/5"
           >
             ⌨️ Play with keyboard
           </button>
         </div>
+
+        <p className="mt-3 text-xs text-slate-400">
+          <span className="font-semibold text-slate-300">Head mode:</span> look up to
+          jump, look down to duck. Move your head gently, only as far as is
+          comfortable — never force your neck. Stop right away if you feel pain,
+          dizziness, or tingling.
+        </p>
 
         <div className="mt-4 text-xs text-slate-400">
           <span className="font-semibold">Keys:</span> ↑ / Space / W jump · ↓ / S (hold) squat

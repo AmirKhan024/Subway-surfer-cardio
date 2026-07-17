@@ -11,6 +11,17 @@
  * Keyboard and pose control share one code path: keyboard input ramps the
  * same `crouch` signal and fires the same `triggerJump()` the pose FSMs do,
  * so gates / reps / metrics are identical downstream.
+ *
+ * HEAD mode (neck ROM): a third signal source — neck flexion (look down)
+ * drives the same crouch/squat path, neck extension (look up) fires the same
+ * jump arc. NOTE (safety, per Govind): extension→jump is a gentle POSITION
+ * edge-trigger with NO velocity term — a velocity gate would train fast,
+ * jerky neck extension, the riskier neck direction. NOTE (Neck Compass):
+ * prod's FA3 measures head ROTATION (yaw) via an ear-span proxy — there is
+ * no pitch math to reuse, so the signal here is nose-vs-shoulderMid
+ * normalized by shoulder width (a RELATIVE head-movement proxy, not
+ * goniometric cervical ROM; torso lean confounds it — the nose-vs-earMid
+ * candidate is tracked for the debug overlay to evaluate on webcam).
  */
 import type {
   GameEngine,
@@ -27,11 +38,12 @@ import {
   COURSE,
   CAMERA,
   KEYBOARD,
+  HEAD,
   ASSESSMENT,
 } from '@/components/games/runner/runner-constants';
 import type { RunnerRawData } from '@/types/raw-data';
 
-export type ControlMode = 'pose' | 'keyboard';
+export type ControlMode = 'pose' | 'keyboard' | 'head';
 export type RunnerPhase = 'calibrating' | 'ready' | 'playing' | 'done';
 
 export interface ControlInput {
@@ -130,6 +142,24 @@ export class RunnerEngine implements GameEngine {
   /** true whenever pose landmarks were usable this frame */
   private trackingOk = false;
 
+  // ── head-mode (neck ROM) signals ──
+  private neckEma = 0;
+  private neckEmaReady = false;
+  private neckNeutral = 0;
+  private calNeckSamples: number[] = [];
+  /** raw peak neck flexion during the current squat-FSM episode (k units) */
+  private headFlexPeakRep = 0;
+  /** raw peak neck extension during the current jump episode (k units) */
+  private headExtPeakRep = 0;
+  private prevExtEngaged = false;
+  private neckFlexSum = 0;
+  private neckExtSum = 0;
+  /** current signed neck delta (debug overlay) */
+  private neckDeltaNow = 0;
+  /** nose-vs-earMid candidate metric (debug overlay comparison) */
+  private neckEarDeltaNow = 0;
+  private earNeutral = 0;
+
   // ── drift guard (M2) ──
   private driftSince = 0;
   private driftActive = false;
@@ -201,6 +231,17 @@ export class RunnerEngine implements GameEngine {
     this.trackingOk = false;
     this.driftSince = 0;
     this.driftActive = false;
+    this.neckEmaReady = false;
+    this.neckNeutral = 0;
+    this.calNeckSamples = [];
+    this.headFlexPeakRep = 0;
+    this.headExtPeakRep = 0;
+    this.prevExtEngaged = false;
+    this.neckFlexSum = 0;
+    this.neckExtSum = 0;
+    this.neckDeltaNow = 0;
+    this.neckEarDeltaNow = 0;
+    this.earNeutral = 0;
 
     this.obstacles = generateCourse(this.seed);
     this.resolved = this.obstacles.map(() => false);
@@ -316,52 +357,73 @@ export class RunnerEngine implements GameEngine {
       };
     }
 
-    const ok = this.fullBodyVisible(landmarks);
+    const isHead = this.controlMode === 'head';
+    const ok = isHead ? this.headVisible(landmarks) : this.fullBodyVisible(landmarks);
     if (!ok) {
       this.calHoldStart = 0;
       this.calHipSamples = [];
       this.calShoulderSamples = [];
+      this.calNeckSamples = [];
       return {
         isReady: false,
         progress: 0,
-        message: 'Get your whole body in frame',
+        message: isHead
+          ? 'Face the camera — head and shoulders in frame'
+          : 'Get your whole body in frame',
       };
     }
 
-    const hipY = (landmarks[LM.LEFT_HIP].y + landmarks[LM.RIGHT_HIP].y) / 2;
     const shoulderW = Math.abs(landmarks[LM.LEFT_SHOULDER].x - landmarks[LM.RIGHT_SHOULDER].x);
+    // head mode is seated-friendly: stability tracks the NOSE, and hips are
+    // never read (they may be out of frame)
+    const shoulderMidY = (landmarks[LM.LEFT_SHOULDER].y + landmarks[LM.RIGHT_SHOULDER].y) / 2;
+    const stabilityY = isHead
+      ? landmarks[LM.NOSE].y
+      : (landmarks[LM.LEFT_HIP].y + landmarks[LM.RIGHT_HIP].y) / 2;
 
-    // wobble check: restart the hold if the hips moved
+    // wobble check: restart the hold if the anchor moved
     if (this.calHipSamples.length > 0) {
       const mean =
         this.calHipSamples.reduce((a, b) => a + b, 0) / this.calHipSamples.length;
-      if (Math.abs(hipY - mean) > CALIB.MAX_WOBBLE) {
+      if (Math.abs(stabilityY - mean) > CALIB.MAX_WOBBLE) {
         this.calHoldStart = 0;
         this.calHipSamples = [];
         this.calShoulderSamples = [];
-        this.emit('CALIB_WOBBLE_RESET', { hipY, mean });
+        this.calNeckSamples = [];
+        this.emit('CALIB_WOBBLE_RESET', { y: stabilityY, mean });
       }
     }
 
     if (this.calHoldStart === 0) this.calHoldStart = now;
-    this.calHipSamples.push(hipY);
+    this.calHipSamples.push(stabilityY);
     this.calShoulderSamples.push(shoulderW);
+    if (isHead) {
+      const k = Math.max(0.05, shoulderW);
+      this.calNeckSamples.push((shoulderMidY - landmarks[LM.NOSE].y) / k);
+    }
 
     const heldMs = now - this.calHoldStart;
     const progress = clamp01(heldMs / CALIB.HOLD_MS);
     if (heldMs >= CALIB.HOLD_MS && this.calHipSamples.length >= 10) {
-      this.hipY0 =
-        this.calHipSamples.reduce((a, b) => a + b, 0) / this.calHipSamples.length;
       this.shoulderW0 =
         this.calShoulderSamples.reduce((a, b) => a + b, 0) /
         this.calShoulderSamples.length;
-      const heels = this.heelYOf(landmarks);
-      this.heelY0 = heels ?? this.hipY0 + 0.35;
+      if (isHead) {
+        this.neckNeutral =
+          this.calNeckSamples.reduce((a, b) => a + b, 0) / this.calNeckSamples.length;
+        this.earNeutral = this.earPitchOf(landmarks) ?? 0;
+      } else {
+        this.hipY0 =
+          this.calHipSamples.reduce((a, b) => a + b, 0) / this.calHipSamples.length;
+        const heels = this.heelYOf(landmarks);
+        this.heelY0 = heels ?? this.hipY0 + 0.35;
+      }
       this.calibrated = true;
       this.phase = 'ready';
       this.emit('CALIB_LOCK', {
         hipY0: this.hipY0,
         shoulderW0: this.shoulderW0,
+        neckNeutral: isHead ? this.neckNeutral : undefined,
         heldMs,
       });
       return { isReady: true, progress: 1, message: 'Locked in!' };
@@ -370,8 +432,25 @@ export class RunnerEngine implements GameEngine {
     return {
       isReady: false,
       progress,
-      message: 'Hold still…',
+      message: isHead ? 'Hold still, chin level…' : 'Hold still…',
     };
+  }
+
+  /** Head mode needs only nose + both shoulders — works seated. */
+  private headVisible(landmarks: NormalizedLandmark[]): boolean {
+    if (!landmarks || landmarks.length < 33) return false;
+    const need = [LM.NOSE, LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER];
+    return need.every((i) => landmarks[i] && landmarks[i].visibility >= CALIB.MIN_VISIBILITY);
+  }
+
+  /** nose-vs-earMid pitch candidate (k units); null if ears not visible. */
+  private earPitchOf(landmarks: NormalizedLandmark[]): number | null {
+    const le = landmarks[LM.LEFT_EAR];
+    const re = landmarks[LM.RIGHT_EAR];
+    if (!le || !re || le.visibility < 0.3 || re.visibility < 0.3) return null;
+    const earMidY = (le.y + re.y) / 2;
+    const k = Math.max(0.05, this.shoulderW0 || 0.2);
+    return (earMidY - landmarks[LM.NOSE].y) / k;
   }
 
   resetCalibration(): void {
@@ -382,7 +461,8 @@ export class RunnerEngine implements GameEngine {
     this.emit('CALIB_RETRY', {});
     this.calHipSamples = [];
     this.calShoulderSamples = [];
-    if (this.controlMode === 'pose') this.phase = 'calibrating';
+    this.calNeckSamples = [];
+    if (this.controlMode !== 'keyboard') this.phase = 'calibrating';
   }
 
   private fullBodyVisible(landmarks: NormalizedLandmark[]): boolean {
@@ -401,7 +481,7 @@ export class RunnerEngine implements GameEngine {
   // ── play ──────────────────────────────────────────────────────────────
 
   startPlaying(): void {
-    if (!this.calibrated && this.controlMode === 'pose') return;
+    if (!this.calibrated && this.controlMode !== 'keyboard') return;
     this.phase = 'playing';
     this.playStartTs = this.lastTs;
   }
@@ -414,6 +494,8 @@ export class RunnerEngine implements GameEngine {
     // 1. control signals (both phases update signals so the HUD/pip stay live)
     if (this.controlMode === 'pose') {
       this.updatePoseSignals(landmarks, timestampMs, dt);
+    } else if (this.controlMode === 'head') {
+      this.updateHeadSignals(landmarks, timestampMs, dt);
     } else {
       this.updateKeyboardSignals(timestampMs, dt);
     }
@@ -601,6 +683,89 @@ export class RunnerEngine implements GameEngine {
     return Math.max(0.05, this.shoulderW0);
   }
 
+  // ── detection: head / neck ROM ────────────────────────────────────────
+
+  /**
+   * Neck flexion (look down) drives the SAME crouch/squat path; neck
+   * extension (look up) fires the SAME jump arc. Downstream (gates, cue,
+   * camera bob, lives, scoring) is untouched.
+   *
+   * NOTE (safety): extension→jump is a POSITION edge-trigger crossing
+   * HEAD.EXT_RISE — deliberately NO velocity term, so nothing ever rewards
+   * a fast/jerky look-up. Re-arms only after return-to-neutral.
+   */
+  private updateHeadSignals(landmarks: NormalizedLandmark[], now: number, dt: number): void {
+    const usable =
+      landmarks &&
+      landmarks.length >= 33 &&
+      landmarks[LM.NOSE]?.visibility >= 0.4 &&
+      landmarks[LM.LEFT_SHOULDER]?.visibility >= 0.4 &&
+      landmarks[LM.RIGHT_SHOULDER]?.visibility >= 0.4;
+    this.trackingOk = !!usable;
+
+    if (!usable || !this.calibrated) {
+      this.crouch = Math.max(0, this.crouch - dt * 2);
+      this.advanceJumpArc(now, dt);
+      return;
+    }
+
+    const k = this.liveScale(landmarks);
+    const shoulderMidY = (landmarks[LM.LEFT_SHOULDER].y + landmarks[LM.RIGHT_SHOULDER].y) / 2;
+    const neckPitchRaw = (shoulderMidY - landmarks[LM.NOSE].y) / k;
+    if (!this.neckEmaReady) {
+      this.neckEma = neckPitchRaw;
+      this.neckEmaReady = true;
+    } else {
+      this.neckEma = HEAD.EMA_ALPHA * neckPitchRaw + (1 - HEAD.EMA_ALPHA) * this.neckEma;
+    }
+    const neckDelta = this.neckEma - this.neckNeutral; // + = looking UP
+    this.neckDeltaNow = neckDelta;
+    // torso-invariant metric candidate for the webcam comparison (debug only)
+    const earPitch = this.earPitchOf(landmarks);
+    this.neckEarDeltaNow = earPitch !== null ? earPitch - this.earNeutral : 0;
+
+    const flex = Math.max(0, -neckDelta); // look-down magnitude
+    const ext = Math.max(0, neckDelta); // look-up magnitude
+
+    // ── flexion → the shared squat/crouch path ──
+    this.crouch = clamp01((flex - HEAD.FLEX_ENGAGE) / HEAD.FLEX_SPAN);
+    if (this.squatState !== 'neutral' || flex > HEAD.NEUTRAL_BAND) {
+      this.headFlexPeakRep = Math.max(this.headFlexPeakRep, flex);
+    }
+    // synthetic drop keeps the shared FSM's thresholds meaningful (keyboard
+    // uses the same mapping); 0 once flexion is back inside the neutral band
+    const pseudoDrop =
+      flex > HEAD.NEUTRAL_BAND ? DETECT.SQUAT_ENGAGE + this.crouch * DETECT.SQUAT_SPAN : 0;
+    this.stepSquatFsm(pseudoDrop, now);
+
+    // ── extension → the shared jump arc (position edge-trigger) ──
+    const extEngaged = ext > HEAD.EXT_RISE;
+    if (extEngaged && !this.prevExtEngaged && this.jumpArmed && this.jumpStartTs === 0) {
+      this.triggerJump(now);
+      this.headExtPeakRep = ext;
+    }
+    this.prevExtEngaged = extEngaged;
+    if (this.jumpStartTs !== 0 || !this.jumpArmed) {
+      this.headExtPeakRep = Math.max(this.headExtPeakRep, ext);
+    }
+    if (!this.jumpArmed && this.jumpStartTs === 0 && Math.abs(neckDelta) < HEAD.NEUTRAL_BAND) {
+      this.jumpArmed = true;
+    }
+
+    this.updateDriftGuard(landmarks, neckDelta, now);
+    this.advanceJumpArc(now, dt);
+
+    // slow-adapting neutral (posture settles over a run) — only while idle
+    if (
+      this.squatState === 'neutral' &&
+      this.jumpStartTs === 0 &&
+      this.jumpArmed &&
+      Math.abs(neckDelta) < HEAD.NEUTRAL_BAND
+    ) {
+      this.neckNeutral = this.neckNeutral + DRIFT.BASELINE_ALPHA * (this.neckEma - this.neckNeutral);
+    }
+  }
+
   private stepSquatFsm(drop: number, now: number): void {
     switch (this.squatState) {
       case 'neutral':
@@ -629,14 +794,31 @@ export class RunnerEngine implements GameEngine {
   private finishSquatRep(): void {
     if (this.squatPeak < DETECT.SQUAT_REP_MIN) {
       this.squatPeak = 0;
+      this.headFlexPeakRep = 0;
       return; // too shallow to count as an attempt
     }
     this.squatReps += 1;
     this.squatDepthSum += this.squatPeak;
-    const clean = this.squatPeak >= DETECT.SQUAT_CLEAN;
+    // NOTE (head mode, per Govind): the ONE authoritative clean definition
+    // is the RAW neck excursion vs HEAD.FLEX_CLEAN — never the derived
+    // game-space crouch (DETECT.SQUAT_CLEAN is body-mode-only).
+    const isHead = this.controlMode === 'head';
+    const clean = isHead
+      ? this.headFlexPeakRep >= HEAD.FLEX_CLEAN
+      : this.squatPeak >= DETECT.SQUAT_CLEAN;
     if (clean) this.cleanReps += 1;
-    this.emit('REP', { kind: 'squat', peak: this.squatPeak, clean });
+    if (isHead) {
+      this.neckFlexSum += Math.min(this.headFlexPeakRep, HEAD.MAX_EXCURSION);
+      this.emit('REP', {
+        kind: 'neck-flexion',
+        peak: this.headFlexPeakRep,
+        clean,
+      });
+    } else {
+      this.emit('REP', { kind: 'squat', peak: this.squatPeak, clean });
+    }
     this.squatPeak = 0;
+    this.headFlexPeakRep = 0;
   }
 
   private stepHeelFsm(landmarks: NormalizedLandmark[], k: number, now: number): void {
@@ -746,17 +928,39 @@ export class RunnerEngine implements GameEngine {
     if (this.jumpStartTs === 0) return;
     const t = (now - this.jumpStartTs) / 1000;
     if (t >= DETECT.JUMP_DURATION_S) {
-      // landing: bank the rep quality. Heel-raise mode measures heel lift,
-      // so it normalizes/cleans against the heel thresholds, not jump ones.
-      const peak = this.controlMode === 'keyboard' ? DETECT.JUMP_APEX : this.jumpMeasuredPeak;
-      const norm = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_APEX;
-      const cleanAt = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_CLEAN;
-      this.jumpHeightSum += clamp01(peak / norm);
-      const clean = peak >= cleanAt;
-      if (clean) this.cleanReps += 1;
-      this.emit('REP', { kind: this.lowImpact ? 'heel' : 'jump', peak, clean });
+      this.bankJumpRep(false);
       this.jumpStartTs = 0;
     }
+  }
+
+  /**
+   * Landing: bank the rep quality. Each mode judges "clean" against ITS OWN
+   * measured excursion — heel lift for low-impact, RAW neck extension vs
+   * HEAD.EXT_CLEAN for head mode (never the game arc), hip rise for body.
+   */
+  private bankJumpRep(finalized: boolean): void {
+    if (this.controlMode === 'head') {
+      const peak = this.headExtPeakRep;
+      const clean = peak >= HEAD.EXT_CLEAN;
+      if (clean) this.cleanReps += 1;
+      this.neckExtSum += Math.min(peak, HEAD.MAX_EXCURSION);
+      this.jumpHeightSum += 1; // game-space arc is fixed in head mode
+      this.emit('REP', { kind: 'neck-extension', peak, clean, ...(finalized && { finalized }) });
+      this.headExtPeakRep = 0;
+      return;
+    }
+    const peak = this.controlMode === 'keyboard' ? DETECT.JUMP_APEX : this.jumpMeasuredPeak;
+    const norm = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_APEX;
+    const cleanAt = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_CLEAN;
+    this.jumpHeightSum += clamp01(peak / norm);
+    const clean = peak >= cleanAt;
+    if (clean) this.cleanReps += 1;
+    this.emit('REP', {
+      kind: this.lowImpact ? 'heel' : 'jump',
+      peak,
+      clean,
+      ...(finalized && { finalized }),
+    });
   }
 
   /**
@@ -765,13 +969,7 @@ export class RunnerEngine implements GameEngine {
    */
   private finalizePendingReps(): void {
     if (this.jumpStartTs !== 0) {
-      const peak = this.controlMode === 'keyboard' ? DETECT.JUMP_APEX : this.jumpMeasuredPeak;
-      const norm = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_APEX;
-      const cleanAt = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_CLEAN;
-      this.jumpHeightSum += clamp01(peak / norm);
-      const clean = peak >= cleanAt;
-      if (clean) this.cleanReps += 1;
-      this.emit('REP', { kind: this.lowImpact ? 'heel' : 'jump', peak, clean, finalized: true });
+      this.bankJumpRep(true);
       this.jumpStartTs = 0;
     }
     if (this.squatState !== 'neutral') {
@@ -868,8 +1066,11 @@ export class RunnerEngine implements GameEngine {
       this.reactionMsList.length > 0
         ? this.reactionMsList.reduce((a, b) => a + b, 0) / this.reactionMsList.length
         : 0;
+    const isHead = this.controlMode === 'head';
     return {
-      testId: 'KR1',
+      // NOTE: KR1N = the neck-ROM variant (ROM category); KR1 = body/keyboard
+      // (mobility). Distinct testId keeps one test = one clinical signal.
+      testId: isHead ? 'KR1N' : 'KR1',
       distance: finite(Math.round(this.distance * 10) / 10),
       obstaclesTotal: this.obstacles.length,
       obstaclesCleared: cleared,
@@ -882,8 +1083,13 @@ export class RunnerEngine implements GameEngine {
       avgJumpHeight: finite(
         this.jumpReps > 0 ? this.jumpHeightSum / this.jumpReps : 0,
       ),
+      /** RELATIVE head-movement range in k units — a proxy, NOT goniometric
+       *  cervical ROM (nose-vs-shoulder is confounded by torso lean). */
+      avgNeckFlexion: finite(isHead && this.squatReps > 0 ? this.neckFlexSum / this.squatReps : 0),
+      avgNeckExtension: finite(isHead && this.jumpReps > 0 ? this.neckExtSum / this.jumpReps : 0),
       avgReactionMs: finite(Math.round(avgReaction)),
       cleanFormRate: finite(totalReps > 0 ? this.cleanReps / totalReps : 0),
+      controlScheme: this.controlMode === 'keyboard' ? 0 : this.controlMode === 'pose' ? 1 : 2,
       controlModeKeyboard: this.controlMode === 'keyboard' ? 1 : 0,
       lowImpact: this.lowImpact ? 1 : 0,
       assessmentValid:
@@ -921,6 +1127,21 @@ export class RunnerEngine implements GameEngine {
     };
     drawBar(x0, this.crouch, DETECT.SQUAT_CLEAR, 'crch', '#f59e0b');
     drawBar(x0 + 40, this.jumpY() / DETECT.JUMP_APEX, DETECT.JUMP_CLEAR / DETECT.JUMP_APEX, 'jump', '#06b6d4');
+    if (this.controlMode === 'head') {
+      // raw neck signals with their CLEAN gates + the ear-based metric
+      // candidate for the webcam comparison (see class NOTE)
+      const flex = Math.max(0, -this.neckDeltaNow);
+      const ext = Math.max(0, this.neckDeltaNow);
+      drawBar(x0 + 80, flex / HEAD.MAX_EXCURSION, HEAD.FLEX_CLEAN / HEAD.MAX_EXCURSION, 'flex', '#f59e0b');
+      drawBar(x0 + 120, ext / HEAD.MAX_EXCURSION, HEAD.EXT_CLEAN / HEAD.MAX_EXCURSION, 'ext', '#06b6d4');
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '10px monospace';
+      ctx.fillText(
+        `neckΔ=${this.neckDeltaNow.toFixed(3)} earΔ=${this.neckEarDeltaNow.toFixed(3)}`,
+        x0 + 80,
+        y0 - 20,
+      );
+    }
     ctx.fillStyle = '#f8fafc';
     ctx.font = '11px monospace';
     ctx.fillText(

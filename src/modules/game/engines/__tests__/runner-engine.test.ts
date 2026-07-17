@@ -561,6 +561,211 @@ describe('RunnerEngine — metrics math', () => {
   });
 });
 
+// ── head / neck-ROM control mode ───────────────────────────────────────────
+
+/**
+ * Seated synthetic frame: nose + shoulders (+ optionally ears) visible,
+ * hips/ankles NOT visible. pitchK = (shoulderMidY − noseY) / shoulderW.
+ */
+function makeHeadFrame(opts: {
+  pitchK?: number;
+  shoulderW?: number;
+  noseVisible?: boolean;
+} = {}): NormalizedLandmark[] {
+  const { pitchK = 0.5, shoulderW = 0.2, noseVisible = true } = opts;
+  const lms: NormalizedLandmark[] = Array.from({ length: 33 }, () => ({
+    x: 0.5,
+    y: 0.5,
+    z: 0,
+    visibility: 0.1, // hips, knees, ankles, heels all invisible — seated close-up
+  }));
+  const shoulderMidY = 0.45;
+  const noseY = shoulderMidY - pitchK * shoulderW;
+  lms[LM.NOSE] = { x: 0.5, y: noseY, z: 0, visibility: noseVisible ? 0.95 : 0.1 };
+  lms[LM.LEFT_SHOULDER] = { x: 0.5 - shoulderW / 2, y: shoulderMidY, z: 0, visibility: 0.95 };
+  lms[LM.RIGHT_SHOULDER] = { x: 0.5 + shoulderW / 2, y: shoulderMidY, z: 0, visibility: 0.95 };
+  lms[LM.LEFT_EAR] = { x: 0.47, y: noseY + 0.01, z: 0, visibility: 0.9 };
+  lms[LM.RIGHT_EAR] = { x: 0.53, y: noseY + 0.01, z: 0, visibility: 0.9 };
+  return lms;
+}
+
+function calibrateHead(engine: RunnerEngine, startT = 1000): number {
+  let t = startT;
+  for (let i = 0; i < 80; i++) {
+    t += FRAME_MS;
+    const st = engine.processCalibrationAt(makeHeadFrame(), t);
+    if (st.isReady) return t;
+  }
+  throw new Error('head calibration never locked');
+}
+
+function driveHead(engine: RunnerEngine, t: number, pitchKs: number[]): number {
+  for (const pitchK of pitchKs) {
+    t += FRAME_MS;
+    engine.processFrame(makeHeadFrame({ pitchK }), t);
+  }
+  return t;
+}
+
+describe('RunnerEngine — head mode calibration (seated)', () => {
+  it('locks with only nose + shoulders visible (no ankles/hips — works seated)', () => {
+    const engine = new RunnerEngine({ controlMode: 'head' });
+    const t = calibrateHead(engine);
+    expect(t).toBeGreaterThan(1000);
+    expect(engine.processCalibration([]).isReady).toBe(true);
+    const lock = engine.drainEvents().find((e) => e.tag === 'CALIB_LOCK');
+    expect(lock).toBeDefined();
+    expect(lock!.data.neckNeutral).toBeCloseTo(0.5, 1);
+  });
+
+  it('BODY pose mode does NOT lock on the same seated frames (ankles required)', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose' });
+    let t = 1000;
+    for (let i = 0; i < 80; i++) {
+      t += FRAME_MS;
+      expect(engine.processCalibrationAt(makeHeadFrame(), t).isReady).toBeFalsy();
+    }
+  });
+
+  it('rejects when the nose is not visible', () => {
+    const engine = new RunnerEngine({ controlMode: 'head' });
+    let t = 1000;
+    for (let i = 0; i < 80; i++) {
+      t += FRAME_MS;
+      const st = engine.processCalibrationAt(makeHeadFrame({ noseVisible: false }), t);
+      expect(st.isReady).toBeFalsy();
+    }
+  });
+});
+
+describe('RunnerEngine — head mode detection', () => {
+  it('a clean look-down counts a squat rep judged on RAW neck excursion', () => {
+    const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    let t = calibrateHead(engine);
+    engine.startPlaying();
+    // flex to 0.20k (above FLEX_CLEAN 0.16), hold, return to neutral
+    t = driveHead(engine, t, ramp(0.5, 0.3, 8));
+    t = driveHead(engine, t, Array(15).fill(0.3));
+    t = driveHead(engine, t, ramp(0.3, 0.5, 8));
+    t = driveHead(engine, t, Array(15).fill(0.5));
+    const raw = engine.getRawData();
+    expect(raw.squatReps).toBe(1);
+    expect(raw.cleanFormRate).toBe(1);
+    expect(raw.avgNeckFlexion).toBeGreaterThan(0.16);
+    expect(raw.testId).toBe('KR1N');
+    expect(raw.controlScheme).toBe(2);
+  });
+
+  it('CLEARED-but-not-CLEAN: shallow look-down clears the crouch gate but cleanFormRate < 1', () => {
+    const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    let t = calibrateHead(engine);
+    engine.startPlaying();
+    // flex target 0.125k: crouch peak ≈ (0.125-0.05)/0.12 = 0.63 > clear 0.55,
+    // but 0.125 < FLEX_CLEAN 0.16 → clean must be false (the ONE clean
+    // authority in head mode is raw neck excursion, not derived crouch)
+    let crouchPeak = 0;
+    t = driveHead(engine, t, ramp(0.5, 0.375, 8));
+    for (let i = 0; i < 20; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeHeadFrame({ pitchK: 0.375 }), t);
+      crouchPeak = Math.max(crouchPeak, engine.getSceneState().crouch);
+    }
+    t = driveHead(engine, t, ramp(0.375, 0.5, 8));
+    t = driveHead(engine, t, Array(15).fill(0.5));
+    const raw = engine.getRawData();
+    expect(crouchPeak).toBeGreaterThan(0.55); // would clear a beam gate
+    expect(raw.squatReps).toBe(1);
+    expect(raw.cleanFormRate).toBe(0); // NOT clean — neck range too small
+  });
+
+  it('look-up fires the jump via POSITION edge-trigger and re-arms only after neutral', () => {
+    const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    let t = calibrateHead(engine);
+    engine.startPlaying();
+    // extend to 0.10k (above EXT_RISE 0.08) — no velocity requirement
+    t = driveHead(engine, t, ramp(0.5, 0.6, 6));
+    t = driveHead(engine, t, Array(10).fill(0.6));
+    expect(engine.getRawData().jumpReps).toBe(1);
+    // staying extended / wiggling up must NOT re-trigger
+    t = driveHead(engine, t, ramp(0.6, 0.55, 4));
+    t = driveHead(engine, t, ramp(0.55, 0.62, 4));
+    t = driveHead(engine, t, Array(30).fill(0.62));
+    expect(engine.getRawData().jumpReps).toBe(1);
+    // return to neutral → re-armed → second look-up (hold so the EMA crosses)
+    t = driveHead(engine, t, ramp(0.62, 0.5, 8));
+    t = driveHead(engine, t, Array(20).fill(0.5));
+    t = driveHead(engine, t, ramp(0.5, 0.6, 6));
+    t = driveHead(engine, t, Array(10).fill(0.6));
+    expect(engine.getRawData().jumpReps).toBe(2);
+  });
+
+  it('a comfortable full look-up is clean; a minimal one is not', () => {
+    const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    let t = calibrateHead(engine);
+    engine.startPlaying();
+    // full extension 0.20k ≥ EXT_CLEAN 0.14 (arc lands after 0.7s = ~22 frames)
+    t = driveHead(engine, t, ramp(0.5, 0.7, 8));
+    t = driveHead(engine, t, Array(25).fill(0.7));
+    t = driveHead(engine, t, ramp(0.7, 0.5, 8));
+    t = driveHead(engine, t, Array(15).fill(0.5));
+    const raw = engine.getRawData();
+    expect(raw.jumpReps).toBe(1);
+    expect(raw.cleanFormRate).toBe(1);
+    expect(raw.avgNeckExtension).toBeGreaterThanOrEqual(0.14);
+  });
+});
+
+describe('RunnerEngine — head-bot clears the course (parity)', () => {
+  it('a scripted head (pose frames only) clears all 20 obstacles', () => {
+    const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    let t = calibrateHead(engine);
+    engine.startPlaying();
+
+    let pitchK = 0.5;
+    let lookUpScript: number[] = [];
+    let jumpedFor = -1;
+    let frames = 0;
+
+    while (!engine.isComplete() && frames < 12000) {
+      frames++;
+      t += FRAME_MS;
+      const s = engine.getSceneState();
+      const cue = s.cue;
+
+      if (lookUpScript.length > 0) {
+        pitchK = lookUpScript.shift()!;
+      } else if (cue?.type === 'beam') {
+        pitchK = Math.max(0.3, pitchK - 0.02); // look down into deep flexion
+      } else if (
+        cue?.type === 'hurdle' &&
+        cue.progress >= 0.7 &&
+        jumpedFor !== cue.obstacleId
+      ) {
+        jumpedFor = cue.obstacleId;
+        // gentle look-up, hold through the gate, return to neutral
+        lookUpScript = [...ramp(pitchK, 0.68, 5), ...Array(14).fill(0.68), ...ramp(0.68, 0.5, 6)];
+        pitchK = lookUpScript.shift()!;
+      } else {
+        pitchK = Math.min(0.5, pitchK + 0.02); // settle back to neutral
+      }
+
+      engine.processFrame(makeHeadFrame({ pitchK }), t);
+    }
+
+    const raw = engine.getRawData();
+    expect(engine.isComplete()).toBe(true);
+    expect(raw.obstaclesCleared).toBe(20);
+    expect(raw.obstaclesFailed).toBe(0);
+    expect(raw.testId).toBe('KR1N');
+    expect(raw.controlScheme).toBe(2);
+    // all-finite invariant holds for head runs too
+    for (const [key, value] of Object.entries(raw)) {
+      if (key === 'testId') continue;
+      expect(Number.isFinite(value as number), `${key} must be finite`).toBe(true);
+    }
+  });
+});
+
 // ── diagnostic events (drained by the layer) ───────────────────────────────
 
 describe('RunnerEngine — diagnostic events', () => {

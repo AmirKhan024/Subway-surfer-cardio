@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import type { RunnerRawData } from '@/types/raw-data';
 import { computeKR1Score, type KR1ScoreResult } from '@/lib/scoring/kr1-local';
 import { getDiagnosticsText } from '@/lib/debug/run-logger';
+import { HEAD } from './runner-constants';
 
 interface RunRecord {
   musculage: number;
@@ -107,6 +108,10 @@ export default function ReportScreen({
 
   const finished = raw.obstaclesCleared + raw.obstaclesFailed >= raw.obstaclesTotal;
   const conditionedPct = Math.min(100, Math.round(score.conditioned * 100));
+  // KR1N = head/neck-ROM run: present neck ranges, never squat/jump labels
+  const isHeadRun = raw.testId === 'KR1N';
+  const flexPct = Math.round((raw.avgNeckFlexion / HEAD.FLEX_CLEAN) * 100);
+  const extPct = Math.round((raw.avgNeckExtension / HEAD.EXT_CLEAN) * 100);
 
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
@@ -116,7 +121,7 @@ export default function ReportScreen({
             {finished ? 'Course complete!' : 'Run over'}
           </h1>
           <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-cyan-300">
-            Runner Fitness
+            {isHeadRun ? 'Neck ROM Runner' : 'Runner Fitness'}
           </span>
         </div>
 
@@ -164,24 +169,35 @@ export default function ReportScreen({
         </p>
 
         <div className="mt-4 grid grid-cols-3 gap-2">
-          <Stat label="Squats" value={String(raw.squatReps)} sub={`avg depth ${(raw.avgSquatDepth * 100).toFixed(0)}%`} />
-          <Stat
-            label={raw.lowImpact ? 'Heel raises' : 'Jumps'}
-            value={String(raw.jumpReps)}
-            sub={`avg height ${(raw.avgJumpHeight * 100).toFixed(0)}%`}
-          />
+          {isHeadRun ? (
+            <>
+              <Stat label="Look-downs" value={String(raw.squatReps)} sub={`range ${flexPct}% of target`} />
+              <Stat label="Look-ups" value={String(raw.jumpReps)} sub={`range ${extPct}% of target`} />
+            </>
+          ) : (
+            <>
+              <Stat label="Squats" value={String(raw.squatReps)} sub={`avg depth ${(raw.avgSquatDepth * 100).toFixed(0)}%`} />
+              <Stat
+                label={raw.lowImpact ? 'Heel raises' : 'Jumps'}
+                value={String(raw.jumpReps)}
+                sub={`avg height ${(raw.avgJumpHeight * 100).toFixed(0)}%`}
+              />
+            </>
+          )}
           <Stat label="Clean form" value={`${(raw.cleanFormRate * 100).toFixed(0)}%`} />
           <Stat
             label="Reaction"
             value={`${raw.avgReactionMs}ms`}
-            sub={raw.controlModeKeyboard ? 'keyboard' : 'body'}
+            sub={raw.controlScheme === 0 ? 'keyboard' : raw.controlScheme === 2 ? 'head' : 'body'}
           />
           <Stat label="Missed" value={String(raw.obstaclesFailed)} />
           <Stat label="Time" value={`${(raw.elapsed / 1000).toFixed(0)}s`} />
         </div>
 
         <p className="mt-4 text-center text-xs text-slate-500">
-          squat depth → mobility · jump power → strength · timing → reflex
+          {isHeadRun
+            ? 'head/neck movement range (relative) → neck mobility · timing → reflex'
+            : 'squat depth → mobility · jump power → strength · timing → reflex'}
         </p>
 
         {raw.assessmentValid === 0 && !score.incomplete && (

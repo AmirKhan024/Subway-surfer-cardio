@@ -11,7 +11,7 @@ import {
   isIncompleteRun,
 } from '../kr1-local';
 import { MATRIX_70_30, getAgeNormFactor, getPreCondBandIdx, getAgeCohortIdx } from '../kr1-matrices';
-import type { RunnerRawData } from '@/types/raw-data';
+import { getTestCategory, type RunnerRawData } from '@/types/raw-data';
 import { RunnerEngine } from '@/modules/game/engines/runner-engine';
 
 function makeRaw(overrides: Partial<RunnerRawData>): RunnerRawData {
@@ -25,8 +25,11 @@ function makeRaw(overrides: Partial<RunnerRawData>): RunnerRawData {
     jumpReps: 10,
     avgSquatDepth: 0.7,
     avgJumpHeight: 0.7,
+    avgNeckFlexion: 0,
+    avgNeckExtension: 0,
     avgReactionMs: 600,
     cleanFormRate: 0.7,
+    controlScheme: 0,
     controlModeKeyboard: 1,
     lowImpact: 0,
     assessmentValid: 1,
@@ -213,6 +216,25 @@ describe('monotonicity', () => {
   it('gender never enters the scoring path (signature is (raw, age) only)', () => {
     // compile-time: computeKR1Score takes exactly raw + age
     expect(computeKR1Score.length).toBe(2);
+  });
+});
+
+// ── KR1N (head/neck-ROM variant) ───────────────────────────────────────────
+
+describe('KR1N head-mode scoring', () => {
+  it('KR1N maps to the ROM category; KR1 stays mobility', () => {
+    expect(getTestCategory('KR1N')).toBe('rom');
+    expect(getTestCategory('KR1')).toBe('mobility');
+  });
+
+  it('KR1N scores through the same X/Y pipeline and keeps its testId', () => {
+    const r = computeKR1Score(
+      makeRaw({ testId: 'KR1N', controlScheme: 2, obstaclesCleared: 16, cleanFormRate: 0.8 }),
+      50,
+    );
+    expect(r.testId).toBe('KR1N');
+    expect(r.preCond).toBeCloseTo(MATRIX_70_30[1][1], 10);
+    expect(Number.isFinite(r.musculage)).toBe(true);
   });
 });
 

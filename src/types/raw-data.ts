@@ -11,7 +11,8 @@
  */
 
 export interface RunnerRawData {
-  testId: 'KR1';
+  /** KR1 = body/keyboard runner (mobility); KR1N = head/neck-ROM runner (rom). */
+  testId: 'KR1' | 'KR1N';
   /** Meters covered (engagement/endurance proxy). */
   distance: number;
   /** Obstacles in the fixed course (20). */
@@ -27,15 +28,21 @@ export interface RunnerRawData {
   avgSquatDepth: number;
   /** 0..1 mean normalized peak hip rise over jump reps. */
   avgJumpHeight: number;
+  /** Head mode only (0 otherwise): mean peak neck flexion / extension in
+   *  k units. RELATIVE head-movement range — a proxy, NOT goniometric
+   *  cervical ROM (nose-vs-shoulder is confounded by torso lean). */
+  avgNeckFlexion: number;
+  avgNeckExtension: number;
   /** Mean cue-shown → movement-initiation latency (ms). NOT comparable
-   *  across control modes — see controlModeKeyboard. */
+   *  across control modes — see controlScheme. */
   avgReactionMs: number;
   /** 0..1 fraction of reps meeting the CLEAN thresholds (strictly above the
    *  clear gates), so this measures quality beyond merely clearing. */
   cleanFormRate: number;
-  /** 1 = keyboard run (reaction = keypress latency), 0 = body control
-   *  (reaction = movement-initiation latency). Numeric to keep the
+  /** 0 = keyboard, 1 = body pose, 2 = head/neck. Numeric to keep the
    *  all-finite invariant. */
+  controlScheme: 0 | 1 | 2;
+  /** Back-compat: 1 = keyboard run (derivable from controlScheme === 0). */
   controlModeKeyboard: 0 | 1;
   /** 1 = low-impact mode (heel-raise instead of jump). */
   lowImpact: 0 | 1;
@@ -50,8 +57,10 @@ export interface RunnerRawData {
 
 export type RawGameData = RunnerRawData;
 
-/** Prod-parity helper (prefix-based, mirrors getTestCategory). */
+/** Prod-parity helper (mirrors getTestCategory). KR1N is the neck-ROM
+ *  variant → 'rom'; the body/keyboard runner stays 'mobility'. */
 export function getTestCategory(testId: string): string {
+  if (testId === 'KR1N') return 'rom';
   if (testId.startsWith('KR')) return 'mobility';
   throw new Error(`Unknown testId: ${testId}`);
 }

@@ -45,6 +45,33 @@ export const DETECT = {
   EMA_ALPHA: 0.2,
 } as const;
 
+// ── Head / neck-ROM control mode ─────────────────────────────────────────
+// All values are neck excursion in k units (normalized by shoulder width),
+// relative to the calibrated neutral. NOTE: no velocity threshold exists by
+// design — extension→jump is a gentle POSITION edge-trigger, because a
+// velocity gate would train fast/jerky neck extension (the riskier neck
+// direction). Clean thresholds sit strictly ABOVE the clear gates but well
+// inside a comfortable sub-maximal range — never reward end-range forcing.
+export const HEAD = {
+  /** look-down starts engaging crouch */
+  FLEX_ENGAGE: 0.05,
+  /** crouch reaches 1.0 at ENGAGE + SPAN (beam clears at crouch>0.55 ⇒ flex ≈ 0.116) */
+  FLEX_SPAN: 0.12,
+  /** flexion depth for a CLEAN look-down rep (strictly above the ~0.116 clear point) */
+  FLEX_CLEAN: 0.16,
+  /** extension crossing this (rising edge) triggers the jump arc */
+  EXT_RISE: 0.08,
+  /** extension for a CLEAN look-up rep */
+  EXT_CLEAN: 0.14,
+  /** |neckDelta| below this re-arms both FSMs */
+  NEUTRAL_BAND: 0.04,
+  /** EMA on neckPitch — between FA3's responsive 0.55 and the body EMA 0.2 */
+  EMA_ALPHA: 0.35,
+  /** plausibility ceiling on RECORDED flexion/extension peaks (FA3-style
+   *  physio cap — metrics never reward cranking past comfortable range) */
+  MAX_EXCURSION: 0.45,
+} as const;
+
 // ── Calibration ──────────────────────────────────────────────────────────
 export const CALIB = {
   /** stable full-body hold required to lock the baseline (time-based) */

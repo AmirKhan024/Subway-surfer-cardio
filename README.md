@@ -15,7 +15,9 @@ npm run build
 ```
 
 - **Body control** needs camera permission + internet on first run (MediaPipe WASM + `pose_landmarker_lite` load from CDN, then cache).
+- **Head / neck control** (`KR1N`, ROM category): look **up** to jump, look **down** to duck — a neck-ROM exercise that works **seated** (calibration needs only head + shoulders). Extension→jump is a gentle **position** trigger (no velocity term — nothing rewards fast/jerky neck movement); "clean" is judged on raw neck excursion against comfortable sub-maximal targets. Recorded ranges are a **relative head-movement proxy** (nose-vs-shoulder, normalized), NOT goniometric cervical ROM. Prod's Neck Compass (FA3) measures yaw rotation, so this pitch signal is new; the torso-invariant nose-vs-ear candidate is shown in `?debug=1` for webcam comparison.
 - **Keyboard mode**: `↑ / Space / W` jump · `↓ / S (hold)` squat — works offline, also the accessibility/dev path.
+- **Diagnostics**: every finished run prints a `===== KRIYA RUN REPORT =====` console group (config, raw data, all scoring intermediates, per-obstacle gate values, health warnings), and the report screen's **"Copy diagnostics"** button copies a paste-ready blob — play, copy, paste to the developer.
 - **`?debug=1`** overlays live crouch/jump bars + gate lines for on-device threshold tuning.
 - **Low-impact mode** replaces jumps with heel-raises. Camera-bob has Full/Gentle/Off (defaults to Gentle under `prefers-reduced-motion`).
 
