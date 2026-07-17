@@ -8,6 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { audioManager } from '@/lib/audio/audio-manager';
+import HowToPlay from './how-to-play';
 
 export interface RunnerProfile {
   age: number;
@@ -85,6 +86,8 @@ export default function StartScreen({
           Level 1 — first-person, one lane. Jump the striped hurdles, squat under
           the beams. The view rises and dips with your body.
         </p>
+
+        <HowToPlay />
 
         {/* profile */}
         <div className="mt-5 grid grid-cols-2 gap-3">

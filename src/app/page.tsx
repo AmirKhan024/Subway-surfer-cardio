@@ -16,6 +16,7 @@ import GameOverScreen from '@/components/games/runner/gameover-screen';
 import { seedForAttempt } from '@/modules/game/engines/runner-timeline';
 import type { RunnerRawData } from '@/types/raw-data';
 import type { ControlMode } from '@/modules/game/engines/runner-engine';
+import { preloadCueImages } from '@/lib/media/cue-preloader';
 import { computeKR1Score } from '@/lib/scoring/kr1-local';
 import { getAgeCohortIdx, getPreCondBandIdx } from '@/lib/scoring/kr1-matrices';
 import {
@@ -135,6 +136,7 @@ export default function Home() {
   }, []);
 
   const handlePlay = useCallback((p: RunnerProfile, m: ControlMode) => {
+    preloadCueImages(m); // decode cue icons before the layer mounts; HUD falls back to arrows if not ready
     setProfile(p);
     setMode(m);
     setScreen('playing');
@@ -164,7 +166,10 @@ export default function Home() {
         debug={debug}
         onComplete={handleComplete}
         onExit={() => setScreen('start')}
-        onFallbackKeyboard={() => setMode('keyboard')}
+        onFallbackKeyboard={() => {
+          preloadCueImages('keyboard'); // head→keyboard fallback needs the Body icon set
+          setMode('keyboard');
+        }}
       />
     );
   }

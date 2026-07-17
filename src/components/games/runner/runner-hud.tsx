@@ -6,6 +6,8 @@
  * timing bar — the bar filling = act NOW). Bottom: persistent disclaimer.
  */
 import type { CueState } from '@/modules/game/engines/runner-engine';
+import { getReadyCueImage } from '@/lib/media/cue-preloader';
+import { cueLabel } from '@/lib/media/mode-media';
 import { COLORS } from './runner-constants';
 
 export interface HudState {
@@ -41,24 +43,30 @@ export function ActionCue({
 }) {
   const isJump = cue.type === 'hurdle';
   const color = isJump ? COLORS.jump : COLORS.squat;
-  const label = isJump
-    ? headMode
-      ? 'LOOK UP'
-      : lowImpact
-        ? 'HEEL RAISE'
-        : 'JUMP'
-    : headMode
-      ? 'LOOK DOWN'
-      : 'SQUAT';
+  // pose/keyboard share the Body asset+label set, so headMode alone picks the mode
+  const mode = headMode ? 'head' : 'pose';
+  const label = cueLabel(mode, cue.type, lowImpact);
   const icon = isJump ? '⬆' : '⬇';
+  // preloaded+decoded ahead of gameplay; null → arrow fallback, never a broken image
+  const iconSrc = getReadyCueImage(mode, isJump ? 'up' : 'down');
   return (
     <div className="flex flex-col items-center gap-1.5 transition-opacity duration-150">
-      <div
-        className="flex h-16 w-16 items-center justify-center rounded-2xl border-2 bg-slate-950/65 text-3xl backdrop-blur-md"
-        style={{ borderColor: color, color }}
-      >
-        {icon}
-      </div>
+      {iconSrc ? (
+        <img
+          src={iconSrc}
+          alt=""
+          draggable={false}
+          className="h-20 w-20 rounded-full border-2 bg-slate-950/65 object-cover backdrop-blur-md"
+          style={{ borderColor: color }}
+        />
+      ) : (
+        <div
+          className="flex h-16 w-16 items-center justify-center rounded-2xl border-2 bg-slate-950/65 text-3xl backdrop-blur-md"
+          style={{ borderColor: color, color }}
+        >
+          {icon}
+        </div>
+      )}
       <div className="text-sm font-bold tracking-widest" style={{ color }}>
         {label}
       </div>
