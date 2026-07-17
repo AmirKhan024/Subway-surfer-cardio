@@ -63,10 +63,11 @@ export default function Home() {
     );
   }
 
-  if (screen === 'report' && lastRaw) {
+  if (screen === 'report' && lastRaw && profile) {
     return (
       <ReportScreen
         raw={lastRaw}
+        age={profile.age}
         onRunAgain={handleRunAgain}
         onChangeSettings={() => setScreen('start')}
       />
