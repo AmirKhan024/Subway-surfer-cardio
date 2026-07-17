@@ -394,6 +394,7 @@ export class RunnerEngine implements GameEngine {
     // 5. finish conditions
     if (this.lives <= 0 || this.resolved.every(Boolean)) {
       this.phase = 'done';
+      this.finalizePendingReps();
     }
 
     this.updateCameraFeel(dt);
@@ -677,6 +678,26 @@ export class RunnerEngine implements GameEngine {
       this.jumpHeightSum += clamp01(peak / norm);
       if (peak >= cleanAt) this.cleanReps += 1;
       this.jumpStartTs = 0;
+    }
+  }
+
+  /**
+   * The run can end mid-rep (final obstacle resolves while airborne or still
+   * squatting) — bank those reps' quality so metrics don't lose the last rep.
+   */
+  private finalizePendingReps(): void {
+    if (this.jumpStartTs !== 0) {
+      const peak = this.controlMode === 'keyboard' ? DETECT.JUMP_APEX : this.jumpMeasuredPeak;
+      const norm = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_APEX;
+      const cleanAt = this.lowImpact ? DETECT.HEEL_CLEAN : DETECT.JUMP_CLEAN;
+      this.jumpHeightSum += clamp01(peak / norm);
+      if (peak >= cleanAt) this.cleanReps += 1;
+      this.jumpStartTs = 0;
+    }
+    if (this.squatState !== 'neutral') {
+      this.squatPeak = Math.max(this.squatPeak, this.crouch);
+      this.finishSquatRep();
+      this.squatState = 'neutral';
     }
   }
 
