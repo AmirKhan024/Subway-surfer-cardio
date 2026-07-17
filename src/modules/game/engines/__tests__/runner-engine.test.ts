@@ -355,6 +355,135 @@ describe('RunnerEngine — pose detection', () => {
   });
 });
 
+// ── drift guard + camera feel (M2) ─────────────────────────────────────────
+
+describe('RunnerEngine — drift guard', () => {
+  it('flags sustained scale drift and clears when the user recenters', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    let t = calibrate(engine); // shoulderW 0.2 baseline
+    engine.startPlaying();
+    // user walks toward the camera: apparent shoulder width +40% (> 35% band)
+    for (let i = 0; i < 75; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6, shoulderW: 0.28 }), t);
+    }
+    expect(engine.getDriftState().drifting).toBe(true);
+    // steps back to the calibrated distance
+    for (let i = 0; i < 10; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6, shoulderW: 0.2 }), t);
+    }
+    expect(engine.getDriftState().drifting).toBe(false);
+  });
+
+  it('brief scale wobble below the sustain window does NOT flag drift', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    let t = calibrate(engine);
+    engine.startPlaying();
+    for (let i = 0; i < 20; i++) {
+      // 660ms < 2s sustain
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6, shoulderW: 0.28 }), t);
+    }
+    expect(engine.getDriftState().drifting).toBe(false);
+  });
+});
+
+describe('RunnerEngine — camera feel (hip-bob)', () => {
+  it('dips the camera on squat and returns on stand', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    const standing = () => engine.getSceneState().cameraY;
+    for (let i = 0; i < 10; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    const eyeStanding = standing();
+    engine.setControlInput({ crouchHeld: true });
+    for (let i = 0; i < 30; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    expect(standing()).toBeLessThan(eyeStanding - 0.5); // dipped ~0.75m
+    engine.setControlInput({ crouchHeld: false });
+    for (let i = 0; i < 40; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    expect(standing()).toBeGreaterThan(eyeStanding - 0.05);
+  });
+
+  it('raises the camera during the jump arc', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    for (let i = 0; i < 10; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    const eyeStanding = engine.getSceneState().cameraY;
+    engine.setControlInput({ jumpPressed: true });
+    let peak = eyeStanding;
+    for (let i = 0; i < 21; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      peak = Math.max(peak, engine.getSceneState().cameraY);
+    }
+    expect(peak).toBeGreaterThan(eyeStanding + 0.3);
+  });
+});
+
+// ── keyboard/pose parity: a pose-driven bot clears the full course ─────────
+
+describe('RunnerEngine — pose bot parity', () => {
+  it('a scripted body (pose frames only) clears all 20 obstacles like the keyboard bot', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    let t = calibrate(engine);
+    engine.startPlaying();
+
+    let hipY = 0.6;
+    let jumpScript: number[] = []; // pending hipY frames for a jump
+    let jumpedFor = -1;
+    let frames = 0;
+
+    while (!engine.isComplete() && frames < 12000) {
+      frames++;
+      t += FRAME_MS;
+      const s = engine.getSceneState();
+      const cue = s.cue;
+
+      if (jumpScript.length > 0) {
+        hipY = jumpScript.shift()!;
+      } else if (cue?.type === 'beam') {
+        hipY = Math.min(0.7, hipY + 0.015); // sink into a deep squat
+      } else if (
+        cue?.type === 'hurdle' &&
+        cue.progress >= 0.75 &&
+        jumpedFor !== cue.obstacleId
+      ) {
+        jumpedFor = cue.obstacleId;
+        // takeoff ramp (fast up) + landing ramp back to baseline
+        jumpScript = [...ramp(hipY, 0.42, 6), ...ramp(0.42, 0.6, 10)];
+        hipY = jumpScript.shift()!;
+      } else {
+        hipY = Math.max(0.6, hipY - 0.02); // stand back up
+      }
+
+      engine.processFrame(makeFrame({ hipY }), t);
+    }
+
+    const raw = engine.getRawData();
+    expect(engine.isComplete()).toBe(true);
+    expect(raw.obstaclesCleared).toBe(20);
+    expect(raw.obstaclesFailed).toBe(0);
+    expect(raw.controlModeKeyboard).toBe(0);
+    expect(raw.squatReps).toBeGreaterThanOrEqual(9); // one per beam (10), FSM-counted
+    expect(raw.jumpReps).toBeGreaterThanOrEqual(10);
+    expect(raw.avgReactionMs).toBeGreaterThan(0);
+  });
+});
+
 // ── raw data invariant ─────────────────────────────────────────────────────
 
 describe('RunnerRawData invariant', () => {
