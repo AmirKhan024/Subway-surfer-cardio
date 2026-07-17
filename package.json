@@ -1,0 +1,35 @@
+{
+  "name": "kriya-runner-l1",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kriya Runner — Level 1. Standalone first-person body-controlled endless runner (squat under beams, jump over hurdles) with local Kriya musculage scoring.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.32",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.575.0",
+    "next": "14.2.35",
+    "react": "^18",
+    "react-dom": "^18",
+    "tailwind-merge": "^2.5.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/three": "^0.170.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5",
+    "vitest": "^2.1.9"
+  }
+}

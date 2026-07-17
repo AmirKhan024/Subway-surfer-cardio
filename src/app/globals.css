@@ -1,0 +1,383 @@
+/* Inter font loaded via Next.js font loader in layout.tsx */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Design Tokens (Dark Mode Only) ─── */
+:root {
+  /* Core palette */
+  --color-background: #0A0E17; /* V2 exact */
+  --color-foreground: #f8fafc;
+  --color-primary: #0d9488;
+  --color-primary-light: #2dd4bf;
+  --color-surface: #131A2B; /* V2 exact */
+  --color-surface-2: #1a2435;
+  --color-surface-3: #243049;
+  --color-muted: #5a6b80;
+  --color-muted-foreground: #8fa3b8;
+  --color-accent-green: #34d399;
+  --color-accent-red: #f87171;
+  --color-accent-orange: #fbbf24;
+  --color-accent-purple: #a78bfa;
+  --color-accent-cyan: #22d3ee;
+
+  /* ─── Game-layer primary CTA (v5-reference) ───
+   * Used for "Start Calibration", "Continue", and all primary actions
+   * inside the game shell (basic-info, instructions, detailed-instructions).
+   * Kept as a distinct token from --color-primary (which anchors the brand teal
+   * and is used by dashboard/marketing surfaces) so we can evolve game-layer
+   * styling independently without touching other areas.
+   */
+  --color-accent-teal: #00E5CC;
+  --color-accent-teal-hover: #00CFB8;
+  --color-accent-teal-soft: rgba(0, 229, 204, 0.12);
+  --color-accent-teal-border: rgba(0, 229, 204, 0.28);
+  --color-accent-teal-glow: rgba(0, 229, 204, 0.25);
+  --color-accent-amber: #FFB547;
+  --color-accent-amber-soft: rgba(255, 181, 71, 0.12);
+  --color-accent-amber-border: rgba(255, 181, 71, 0.35);
+  --color-accent-danger: #FF4D6A;
+  --color-accent-danger-soft: rgba(255, 77, 106, 0.08);
+  --color-accent-danger-border: rgba(255, 77, 106, 0.35);
+
+  /* Landing page HSL tokens */
+  --background: 222 47% 8%;
+  --foreground: 210 40% 98%;
+  --card: 222 47% 12%;
+  --card-foreground: 210 40% 98%;
+  --primary: 175 75% 45%;
+  --primary-foreground: 222 47% 5%;
+  --muted: 217 32% 16%;
+  --muted-foreground: 215 20% 75%;
+  --border: 217 32% 20%;
+
+  /* Glassmorphism Variables */
+  --glass-bg: rgba(30, 41, 59, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-shadow: rgba(0, 0, 0, 0.5);
+  --glass-inner-glow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --glow-color: rgba(45, 212, 191, 0.25);
+}
+
+/* ─── Base Styles ─── */
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  /* Hide all scrollbars globally — content still scrollable */
+  * {
+    -ms-overflow-style: none;   /* IE / Edge */
+    scrollbar-width: none;      /* Firefox */
+  }
+  *::-webkit-scrollbar {
+    display: none;              /* Chrome / Safari / Opera */
+  }
+
+  /* Selection Color */
+  ::selection {
+    background-color: rgba(13, 148, 136, 0.2);
+    color: var(--color-foreground);
+  }
+}
+
+/* ─── Glass Components ─── */
+@layer components {
+  .glass-panel {
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    background: var(--glass-bg);
+    border-radius: 20px;
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-inner-glow), 0 8px 32px 0 rgba(15, 23, 42, 0.37);
+  }
+
+  .glass-card {
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    background: var(--glass-bg);
+    border-radius: 16px;
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-inner-glow), 0 4px 16px 0 rgba(15, 23, 42, 0.25);
+    transition: all 0.3s ease;
+  }
+
+  .glass-card:hover {
+    border-color: rgba(13, 148, 136, 0.3);
+    box-shadow: var(--glass-inner-glow), 0 8px 24px 0 rgba(13, 148, 136, 0.15);
+  }
+
+  .glass-card.glow {
+    box-shadow: var(--glass-inner-glow), 0 8px 32px 0 rgba(13, 148, 136, 0.25);
+    border-color: var(--color-primary);
+  }
+
+  /* Mesh Background */
+  .mesh-bg {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .mesh-bg::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at 20% 50%, rgba(13, 148, 136, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(34, 211, 238, 0.08) 0%, transparent 50%);
+    pointer-events: none;
+  }
+
+  /* Text Classes */
+  .text-gradient {
+    background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Button Base */
+  .btn-glass {
+    @apply px-4 py-2 rounded-lg backdrop-blur-md border text-foreground transition-all active:scale-95;
+    background: rgba(21, 28, 44, 0.5);
+    border-color: var(--color-surface-2);
+  }
+  .btn-glass:hover {
+    background: rgba(21, 28, 44, 0.8);
+    border-color: rgba(13, 148, 136, 0.5);
+  }
+
+  .btn-primary {
+    @apply px-4 py-2 rounded-lg bg-primary text-white font-semibold transition-all hover:bg-primary-light active:scale-95 shadow-lg hover:shadow-xl;
+  }
+
+  /* Input Focus Ring */
+  .input-focus {
+    @apply focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background;
+  }
+}
+
+/* ─── Animations ─── */
+@layer utilities {
+  .animate-fade-up {
+    animation: fadeUp 0.5s ease-out forwards;
+  }
+
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out forwards;
+  }
+
+  @keyframes fadeUp {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateX(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* ─── Mirror (Kriya Care) game-layer overlay utilities ─── */
+  .bg-overlay {
+    background-color: rgba(8, 11, 19, 0.92);
+    border: 1px solid rgba(36, 48, 73, 0.85);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+  }
+  .bg-overlay-danger {
+    background-color: rgba(80, 12, 24, 0.92);
+    border: 1px solid var(--color-accent-danger-border);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+  }
+  .bg-overlay-amber {
+    background-color: rgba(70, 38, 4, 0.92);
+    border: 1px solid var(--color-accent-amber-border);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+  }
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-surface-3);
+    border-radius: 12px;
+  }
+}
+
+/* ─── Landing Page Glass Components ─── */
+[data-lp] .glass-card {
+  background: linear-gradient(145deg, var(--glass-bg) 0%, transparent 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-lp] .glass-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px var(--glass-shadow), 0 0 40px var(--glow-color);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* SVG noise overlay for landing page */
+[data-lp] .noise-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.20;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.5'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+
+/* ─── V2-parity utility classes (used by ROM/Mobility instruction + basic-info layers) ─── */
+.v2-page {
+  background: #0A0E17;
+  color: #FFFFFF;
+  min-height: 100%;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.v2-page-inner {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 28px 18px 60px;
+}
+.v2-card {
+  background: #131A2B;
+  border: 1px solid #1E2A45;
+  border-radius: 14px;
+  padding: 28px 22px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+.v2-h1 {
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  margin-bottom: 10px;
+  color: #FFFFFF;
+}
+.v2-subtitle {
+  text-align: center;
+  color: #A0AEC0;
+  font-size: 15.5px;
+  line-height: 1.5;
+  margin-bottom: 22px;
+  padding: 0 4px;
+}
+.v2-step-list {
+  list-style: none;
+  counter-reset: v2step;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+}
+.v2-step-list li {
+  counter-increment: v2step;
+  position: relative;
+  padding: 14px 14px 14px 50px;
+  background: rgba(0, 229, 204, 0.04);
+  border: 1px solid rgba(0, 229, 204, 0.18);
+  border-radius: 12px;
+  color: #FFFFFF;
+  font-size: 15.5px;
+  line-height: 1.5;
+}
+.v2-step-list li::before {
+  content: counter(v2step);
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #00E5CC;
+  color: #0A0E17;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+}
+.v2-safety {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 77, 106, 0.08);
+  border: 1px solid rgba(255, 77, 106, 0.35);
+  color: #FFD0D8;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.v2-cta {
+  display: block;
+  width: 100%;
+  margin-top: 22px;
+  background: #00E5CC;
+  color: #0A0E17;
+  border: none;
+  border-radius: 999px;
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  padding: 14px 18px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.v2-cta:hover, .v2-cta:focus-visible { background: #00CFB8; }
+.v2-cta:active { transform: scale(0.99); }
+.v2-cta.secondary {
+  background: transparent;
+  color: #00E5CC;
+  border: 1px solid #00E5CC;
+}
+.v2-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(0, 229, 204, 0.12);
+  color: #00E5CC;
+  border: 1px solid rgba(0, 229, 204, 0.35);
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.font-heading { font-family: 'Space Grotesk', 'Inter', sans-serif; }
