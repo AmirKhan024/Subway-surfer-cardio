@@ -1,0 +1,101 @@
+/**
+ * Kriya Runner L1 — fixed-course obstacle timeline (seeded, deterministic).
+ *
+ * NOTE (seed policy): a single fixed seed would let users memorize the course
+ * and inflate scores across attempts — a false musculage trend. Policy:
+ * the FIRST run of a session uses ASSESSMENT_SEED; "Run again" rotates
+ * through SEED_POOL. Every seed produces a matched-difficulty course
+ * (same obstacle count, same 10/10 type mix, movement-paced min gaps),
+ * so metrics stay comparable across seeds. The seed is recorded in
+ * RunnerRawData for the audit trail.
+ */
+import { COURSE } from '@/components/games/runner/runner-constants';
+
+export type ObstacleType = 'hurdle' | 'beam';
+
+export interface Obstacle {
+  id: number;
+  type: ObstacleType;
+  /** distance (meters from run start) of the action plane */
+  atDistance: number;
+}
+
+/** Deterministic 32-bit PRNG (mulberry32). */
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Speed at obstacle index i (linear ramp across the course). */
+export function speedAtIndex(i: number): number {
+  const t = COURSE.OBSTACLES <= 1 ? 0 : i / (COURSE.OBSTACLES - 1);
+  return COURSE.SPEED_START + (COURSE.SPEED_END - COURSE.SPEED_START) * t;
+}
+
+/**
+ * Generate the fixed 20-obstacle course for a seed.
+ * Matched difficulty across seeds: exactly half hurdles / half beams,
+ * never 3 of the same type in a row, and every gap >= MIN_GAP_S at the
+ * local speed so a full human rep always fits between obstacles.
+ */
+export function generateCourse(seed: number): Obstacle[] {
+  const rng = mulberry32(seed);
+  const n = COURSE.OBSTACLES;
+
+  // 10/10 type mix, seeded, with two hard constraints: never 3 of a type in
+  // a row, and never paint into a corner where the tail would force one.
+  // Feasibility: a run of type T needs separators from the other type O, so
+  // remaining[T] <= 2*(remaining[O]+1) - trailingRun(T) must hold after
+  // every pick.
+  const remaining: Record<ObstacleType, number> = { hurdle: n / 2, beam: n / 2 };
+  const types: ObstacleType[] = [];
+  const other = (t: ObstacleType): ObstacleType => (t === 'hurdle' ? 'beam' : 'hurdle');
+  const trailingRun = (t: ObstacleType): number => {
+    let run = 0;
+    for (let i = types.length - 1; i >= 0 && types[i] === t; i--) run++;
+    return run;
+  };
+  const feasibleAfter = (pick: ObstacleType): boolean => {
+    const r = { ...remaining, [pick]: remaining[pick] - 1 };
+    if (r[pick] < 0) return false;
+    const runPick = trailingRun(pick) + 1;
+    if (runPick >= 3) return false;
+    for (const t of ['hurdle', 'beam'] as const) {
+      const trail = t === pick ? runPick : 0;
+      if (r[t] > 2 * (r[other(t)] + 1) - trail) return false;
+    }
+    return true;
+  };
+  for (let i = 0; i < n; i++) {
+    const preferred: ObstacleType = rng() < 0.5 ? 'hurdle' : 'beam';
+    const pick = feasibleAfter(preferred) ? preferred : other(preferred);
+    types.push(pick);
+    remaining[pick] -= 1;
+  }
+
+  const obstacles: Obstacle[] = [];
+  let d = COURSE.LEAD_IN_M;
+  for (let i = 0; i < n; i++) {
+    obstacles.push({ id: i, type: types[i], atDistance: d });
+    const gapSeconds = COURSE.MIN_GAP_S + rng() * COURSE.EXTRA_GAP_S;
+    d += speedAtIndex(i) * gapSeconds;
+  }
+  return obstacles;
+}
+
+/** Total course length in meters (last obstacle + a short run-out). */
+export function courseLength(obstacles: Obstacle[]): number {
+  return obstacles[obstacles.length - 1].atDistance + 20;
+}
+
+/** Pick the seed for a given attempt number (0 = assessment run). */
+export function seedForAttempt(attempt: number): number {
+  const pool = COURSE.SEED_POOL;
+  return pool[attempt % pool.length];
+}
