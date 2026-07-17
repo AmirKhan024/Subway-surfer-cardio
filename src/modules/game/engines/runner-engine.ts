@@ -153,6 +153,8 @@ export class RunnerEngine implements GameEngine {
   private jumpArmed = true;
   private jumpStartTs = 0; // 0 = not airborne
   private jumpMeasuredPeak = 0;
+  /** last jump initiation (any mode) — drives the intent-based hurdle clear */
+  private lastJumpTriggerTs = 0;
   private heelState: FsmState = 'neutral';
   private heelPeak = 0;
   /** true whenever pose landmarks were usable this frame */
@@ -184,6 +186,13 @@ export class RunnerEngine implements GameEngine {
   private obstacles: Obstacle[] = [];
   private resolved: boolean[] = [];
   private clearedFlags: boolean[] = [];
+  /** hurdles awaiting the post-crossing jump grace before failing */
+  private pendingHurdles: {
+    index: number;
+    crossTs: number;
+    crouchAtGate: number;
+    jumpYAtGate: number;
+  }[] = [];
   // coins are ENGAGEMENT ONLY — they never feed the KR1 scoring bands
   private coins: Coin[] = [];
   /** plane crossed — no further checks (grabbed OR missed) */
@@ -249,6 +258,8 @@ export class RunnerEngine implements GameEngine {
     this.jumpArmed = true;
     this.jumpStartTs = 0;
     this.jumpMeasuredPeak = 0;
+    this.lastJumpTriggerTs = 0;
+    this.pendingHurdles = [];
     this.heelState = 'neutral';
     this.heelPeak = 0;
     this.trackingOk = false;
@@ -564,6 +575,9 @@ export class RunnerEngine implements GameEngine {
       }
     }
 
+    // 3c. decide hurdles waiting out the post-crossing jump grace
+    this.processPendingHurdles(timestampMs);
+
     // 4. cue for the nearest unresolved obstacle
     this.updateCue(timestampMs);
 
@@ -584,11 +598,76 @@ export class RunnerEngine implements GameEngine {
 
   private resolveObstacle(i: number, now: number): void {
     const ob = this.obstacles[i];
+
+    if (ob.type === 'beam') {
+      // squat is a HOLD signal — sampling at the crossing is reliable
+      this.finishObstacle(i, now, this.crouch > DETECT.SQUAT_CLEAR, {
+        crouchAtGate: this.crouch,
+        jumpYAtGate: this.jumpY(),
+      });
+      return;
+    }
+
+    // NOTE (hurdles): success is INTENT-based, not an arc sample. The old
+    // single-frame jumpY>JUMP_CLEAR check only accepted takeoffs ~0.14-0.56s
+    // before the plane — real jumps slightly early/late cost a life. Now:
+    // cleared if airborne at the crossing OR a jump was initiated within
+    // JUMP_PRE_WINDOW_MS; otherwise the fail is DEFERRED by
+    // JUMP_POST_GRACE_MS so a just-late jump still counts. jumpY() remains
+    // visual-only (camera bob, aerial coins, debug bars).
+    const msSinceJump = this.lastJumpTriggerTs > 0 ? now - this.lastJumpTriggerTs : Infinity;
+    const intentCleared = this.jumpStartTs !== 0 || msSinceJump <= DETECT.JUMP_PRE_WINDOW_MS;
+    if (intentCleared) {
+      this.finishObstacle(i, now, true, {
+        crouchAtGate: this.crouch,
+        jumpYAtGate: this.jumpY(),
+        intentCleared: true,
+        msSinceJump: Number.isFinite(msSinceJump) ? Math.round(msSinceJump) : -1,
+      });
+    } else {
+      this.pendingHurdles.push({
+        index: i,
+        crossTs: now,
+        crouchAtGate: this.crouch,
+        jumpYAtGate: this.jumpY(),
+      });
+    }
+  }
+
+  /** Decide pending hurdles: a jump initiated during the grace retro-clears. */
+  private processPendingHurdles(now: number): void {
+    if (this.pendingHurdles.length === 0) return;
+    const remaining: typeof this.pendingHurdles = [];
+    for (const p of this.pendingHurdles) {
+      if (this.lastJumpTriggerTs >= p.crossTs) {
+        this.finishObstacle(p.index, now, true, {
+          crouchAtGate: p.crouchAtGate,
+          jumpYAtGate: p.jumpYAtGate,
+          intentCleared: true,
+          retroCleared: true,
+          msSinceJump: -Math.round(this.lastJumpTriggerTs - p.crossTs), // negative = after
+        });
+      } else if (now >= p.crossTs + DETECT.JUMP_POST_GRACE_MS) {
+        this.finishObstacle(p.index, now, false, {
+          crouchAtGate: p.crouchAtGate,
+          jumpYAtGate: p.jumpYAtGate,
+          graceExpired: true,
+        });
+      } else {
+        remaining.push(p);
+      }
+    }
+    this.pendingHurdles = remaining;
+  }
+
+  private finishObstacle(
+    i: number,
+    now: number,
+    cleared: boolean,
+    logData: Record<string, unknown>,
+  ): void {
+    const ob = this.obstacles[i];
     this.resolved[i] = true;
-    const cleared =
-      ob.type === 'beam'
-        ? this.crouch > DETECT.SQUAT_CLEAR
-        : this.jumpY() > DETECT.JUMP_CLEAR;
     this.clearedFlags[i] = cleared;
     if (!cleared) {
       this.lives -= 1;
@@ -600,14 +679,17 @@ export class RunnerEngine implements GameEngine {
       id: ob.id,
       type: ob.type,
       cleared,
-      crouchAtGate: this.crouch,
-      jumpYAtGate: this.jumpY(),
       livesLeft: this.lives,
+      ...logData,
     });
   }
 
   private updateCue(now: number): void {
-    const idx = this.resolved.findIndex((r) => !r);
+    // first unresolved obstacle AHEAD of the player (a pending-grace hurdle
+    // behind us must not re-show its cue)
+    const idx = this.obstacles.findIndex(
+      (ob, i) => !this.resolved[i] && ob.atDistance >= this.distance,
+    );
     if (idx === -1) {
       this.cue = null;
       return;
@@ -697,8 +779,11 @@ export class RunnerEngine implements GameEngine {
       if (this.jumpStartTs !== 0) {
         this.jumpMeasuredPeak = Math.max(this.jumpMeasuredPeak, riseRaw);
       }
-      // return-to-neutral re-arms the jump
-      if (!this.jumpArmed && Math.abs(drop) < DETECT.NEUTRAL_BAND && this.jumpStartTs === 0) {
+      // re-arm once landed and roughly upright. NOTE: relaxed from the strict
+      // neutral band (|drop|<0.08) to drop<SQUAT_ENGAGE — landing slightly
+      // forward/crouched used to wedge the jump disarmed. The velocity gate
+      // still prevents false re-triggers.
+      if (!this.jumpArmed && drop < DETECT.SQUAT_ENGAGE && this.jumpStartTs === 0) {
         this.jumpArmed = true;
       }
     }
@@ -962,6 +1047,7 @@ export class RunnerEngine implements GameEngine {
 
   private triggerJump(now: number): void {
     this.jumpStartTs = now;
+    this.lastJumpTriggerTs = now;
     this.jumpArmed = false;
     this.jumpMeasuredPeak = 0;
     this.jumpReps += 1;

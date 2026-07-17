@@ -651,6 +651,140 @@ describe('RunnerEngine — metrics math', () => {
   });
 });
 
+// ── intent-based jump clear (forgiving window) ─────────────────────────────
+
+/**
+ * Keyboard bot that plays perfectly EXCEPT the first hurdle, where jump
+ * timing is scripted: `atTtaS` jumps that many seconds BEFORE the plane;
+ * `atMsPast` jumps that many ms AFTER the crossing; neither → never jumps it.
+ */
+function runFirstHurdleTimingBot(
+  engine: RunnerEngine,
+  timing: { atTtaS?: number; atMsPast?: number },
+): number {
+  engine.startPlaying();
+  let t = 1000;
+  let frames = 0;
+  let firstHurdleId = -1;
+  let jumpedFirst = false;
+  let jumpedFor = -1;
+  while (!engine.isComplete() && frames < 12000) {
+    frames++;
+    t += FRAME_MS;
+    const s = engine.getSceneState();
+    if (firstHurdleId === -1) {
+      const hurdles = s.obstacles.filter((o) => o.type === 'hurdle');
+      firstHurdleId = hurdles.reduce((a, b) => (a.zAhead < b.zAhead ? a : b)).id;
+    }
+    const first = s.obstacles.find((o) => o.id === firstHurdleId)!;
+    const cue = s.cue;
+    engine.setControlInput({ crouchHeld: cue?.type === 'beam' });
+
+    if (!jumpedFirst && !first.resolved) {
+      if (timing.atTtaS !== undefined && first.zAhead > 0 && first.zAhead / s.speed <= timing.atTtaS) {
+        jumpedFirst = true;
+        engine.setControlInput({ jumpPressed: true });
+      }
+      if (
+        timing.atMsPast !== undefined &&
+        first.zAhead <= 0 &&
+        (-first.zAhead / s.speed) * 1000 >= timing.atMsPast
+      ) {
+        jumpedFirst = true;
+        engine.setControlInput({ jumpPressed: true });
+      }
+    }
+    if (cue?.type === 'hurdle' && cue.obstacleId !== firstHurdleId && cue.progress >= 0.8 && jumpedFor !== cue.obstacleId) {
+      jumpedFor = cue.obstacleId;
+      engine.setControlInput({ jumpPressed: true });
+    }
+    engine.processFrame([], t);
+  }
+  return firstHurdleId;
+}
+
+describe('RunnerEngine — intent-based hurdle clearing', () => {
+  it("REGRESSION (Govind's bug): a jump initiated 0.70s before the plane now CLEARS", () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    const firstHurdleId = runFirstHurdleTimingBot(engine, { atTtaS: 0.7 });
+    const first = engine.getSceneState().obstacles.find((o) => o.id === firstHurdleId)!;
+    expect(first.cleared).toBe(true);
+    expect(engine.getRawData().obstaclesFailed).toBe(0);
+  });
+
+  it('a jump ~100ms AFTER the crossing retro-clears within the grace window', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    const firstHurdleId = runFirstHurdleTimingBot(engine, { atMsPast: 100 });
+    const first = engine.getSceneState().obstacles.find((o) => o.id === firstHurdleId)!;
+    expect(first.cleared).toBe(true);
+    expect(engine.getRawData().obstaclesFailed).toBe(0);
+    const retro = engine
+      .drainEvents()
+      .find((e) => e.tag === 'OBSTACLE' && (e.data as { id: number }).id === firstHurdleId);
+    expect((retro!.data as { retroCleared?: boolean }).retroCleared).toBe(true);
+  });
+
+  it('no jump at all still fails the hurdle (after the grace) — honesty preserved', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    const firstHurdleId = runFirstHurdleTimingBot(engine, {});
+    const first = engine.getSceneState().obstacles.find((o) => o.id === firstHurdleId)!;
+    expect(first.cleared).toBe(false);
+    const raw = engine.getRawData();
+    expect(raw.obstaclesFailed).toBe(1);
+    const fail = engine
+      .drainEvents()
+      .find((e) => e.tag === 'OBSTACLE' && (e.data as { id: number }).id === firstHurdleId);
+    expect((fail!.data as { graceExpired?: boolean }).graceExpired).toBe(true);
+  });
+
+  it('re-arm forgiveness: landing into a slight crouch no longer wedges the jump disarmed', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    let t = calibrate(engine);
+    engine.startPlaying();
+    // jump 1
+    t = drivePose(engine, t, ramp(0.6, 0.42, 7));
+    expect(engine.getRawData().jumpReps).toBe(1);
+    // land into a SLIGHT crouch: drop 0.10 (> old 0.08 neutral band, < 0.15)
+    t = drivePose(engine, t, ramp(0.42, 0.62, 8));
+    t = drivePose(engine, t, Array(30).fill(0.62));
+    // jump 2 from the slightly-crouched stance must still trigger
+    t = drivePose(engine, t, ramp(0.62, 0.42, 7));
+    expect(engine.getRawData().jumpReps).toBe(2);
+  });
+
+  it('head mode: an early look-up (short, returned to neutral) still clears every hurdle', () => {
+    const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    let t = calibrateHead(engine);
+    engine.startPlaying();
+    let pitchK = 0.5;
+    let lookUpScript: number[] = [];
+    let jumpedFor = -1;
+    let frames = 0;
+    while (!engine.isComplete() && frames < 12000) {
+      frames++;
+      t += FRAME_MS;
+      const s = engine.getSceneState();
+      const cue = s.cue;
+      if (lookUpScript.length > 0) {
+        pitchK = lookUpScript.shift()!;
+      } else if (cue?.type === 'beam') {
+        pitchK = Math.max(0.3, pitchK - 0.02);
+      } else if (cue?.type === 'hurdle' && cue.progress >= 0.65 && jumpedFor !== cue.obstacleId) {
+        jumpedFor = cue.obstacleId;
+        // EARLY + SHORT: ~0.5s look-up, back to neutral before the plane
+        lookUpScript = [...ramp(pitchK, 0.68, 5), ...Array(4).fill(0.68), ...ramp(0.68, 0.5, 6)];
+        pitchK = lookUpScript.shift()!;
+      } else {
+        pitchK = Math.min(0.5, pitchK + 0.02);
+      }
+      engine.processFrame(makeHeadFrame({ pitchK }), t);
+    }
+    const raw = engine.getRawData();
+    expect(raw.obstaclesCleared).toBe(20);
+    expect(raw.obstaclesFailed).toBe(0);
+  });
+});
+
 // ── head / neck-ROM control mode ───────────────────────────────────────────
 
 /**

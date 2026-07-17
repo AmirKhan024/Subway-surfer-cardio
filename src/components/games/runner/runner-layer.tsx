@@ -21,7 +21,6 @@ import { attachKeyboard } from './keyboard-input';
 import RunnerHUD, { type HudState } from './runner-hud';
 import { useCamera } from '@/lib/mediapipe/use-camera';
 import { usePoseDetector } from '@/lib/mediapipe/use-pose';
-import TrackingPip from './tracking-pip';
 import { klog } from '@/lib/debug/run-logger';
 import { audioManager, type SfxName } from '@/lib/audio/audio-manager';
 import type { EngineEvent } from '@/modules/game/engines/runner-engine';
@@ -70,6 +69,8 @@ export default function RunnerLayer({
 }: RunnerLayerProps) {
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  /** visible calibration self-view — same MediaStream as videoRef */
+  const calVideoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const engineRef = useRef<RunnerEngine | null>(null);
@@ -150,6 +151,21 @@ export default function RunnerLayer({
   useEffect(() => {
     if (pose.error) setPoseError(pose.error);
   }, [pose.error]);
+
+  // mirror the camera stream into the calibration self-view (one MediaStream
+  // can feed multiple <video> elements). Video never leaves the device.
+  useEffect(() => {
+    if (uiPhase !== 'calibrating') return;
+    const id = setInterval(() => {
+      const src = videoRef.current?.srcObject;
+      const cal = calVideoRef.current;
+      if (src && cal && cal.srcObject !== src) {
+        cal.srcObject = src;
+        void cal.play().catch(() => {});
+      }
+    }, 300);
+    return () => clearInterval(id);
+  }, [uiPhase]);
 
   // ── engine + scene + game loop ─────────────────────────────────────────
   useEffect(() => {
@@ -335,13 +351,12 @@ export default function RunnerLayer({
         </button>
       )}
 
-      {isCameraMode && (uiPhase === 'playing' || uiPhase === 'countdown') && (
-        <TrackingPip
-          videoRef={videoRef}
-          landmarksRef={latestLandmarksRef}
-          tracking={tracking}
-          drifting={drifting}
-        />
+      {/* NOTE: the in-play camera PiP was removed (mobile UX) — the tracking
+          safeguard survives as this text-only toast */}
+      {isCameraMode && uiPhase === 'playing' && (!tracking || drifting) && (
+        <div className="pointer-events-none absolute left-1/2 top-36 z-30 -translate-x-1/2 rounded-xl border border-red-400/40 bg-slate-950/80 px-4 py-2 text-sm font-semibold text-red-300 backdrop-blur-md">
+          {!tracking ? '📷 Step back into frame' : '📷 Recenter — move back to your start spot'}
+        </div>
       )}
 
       {/* calibration overlay */}
@@ -355,25 +370,36 @@ export default function RunnerLayer({
               ? 'Sit tall, chin level, look straight at the screen. Hold still.'
               : 'Get your full body in frame — head to feet. Hold still.'}
           </p>
-          <div className="relative mt-6 h-28 w-28">
-            <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
-              <circle cx="50" cy="50" r="44" fill="none" stroke="#1e293b" strokeWidth="8" />
+          {/* live mirrored self-view INSIDE the progress ring (Kriya-style) */}
+          <div className="relative mt-6 h-44 w-44">
+            <video
+              ref={calVideoRef}
+              playsInline
+              muted
+              className="absolute inset-2 h-40 w-40 rounded-full bg-slate-900 object-cover"
+              style={{ transform: 'scaleX(-1)' }}
+            />
+            <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full -rotate-90">
+              <circle cx="50" cy="50" r="47" fill="none" stroke="#1e293b" strokeWidth="5" />
               <circle
                 cx="50"
                 cy="50"
-                r="44"
+                r="47"
                 fill="none"
                 stroke="#06b6d4"
-                strokeWidth="8"
+                strokeWidth="5"
                 strokeLinecap="round"
-                strokeDasharray={`${(calStatus?.progress ?? 0) * 276} 276`}
+                strokeDasharray={`${(calStatus?.progress ?? 0) * 295} 295`}
               />
             </svg>
-            <div className="absolute inset-0 flex items-center justify-center text-lg font-bold text-cyan-300">
-              {Math.round((calStatus?.progress ?? 0) * 100)}%
-            </div>
           </div>
-          <p className="mt-4 text-sm text-cyan-200">{calStatus?.message ?? 'Starting camera…'}</p>
+          <div className="mt-3 text-lg font-bold text-cyan-300">
+            {Math.round((calStatus?.progress ?? 0) * 100)}%
+          </div>
+          <p className="mt-1 text-sm text-cyan-200">{calStatus?.message ?? 'Starting camera…'}</p>
+          <p className="mt-3 text-xs text-slate-400">
+            🔒 Your camera video stays on your device and is never stored or uploaded.
+          </p>
           {calStatus?.isTimedOut && (
             <button
               onClick={retryCalibration}

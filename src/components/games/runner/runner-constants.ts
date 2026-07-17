@@ -31,9 +31,17 @@ export const DETECT = {
   JUMP_CLEAR: 0.35,
   /** measured rise (k units) for a CLEAN jump */
   JUMP_CLEAN: 0.5,
-  /** game-space ballistic arc: apex + duration */
+  /** game-space ballistic arc: apex + duration (VISUAL feel only — hurdle
+   *  success is intent-based, see JUMP_PRE/POST below) */
   JUMP_APEX: 0.55,
   JUMP_DURATION_S: 0.7,
+  /** a hurdle clears if a jump was INITIATED within this window before the
+   *  crossing (covers the whole 700ms arc + a landed-early margin). Fixes
+   *  "I clearly jumped but lost a life": the old single-frame arc sample
+   *  (jumpY>0.35) only accepted takeoffs ~0.14–0.56s before the plane. */
+  JUMP_PRE_WINDOW_MS: 750,
+  /** ...or up to this long AFTER the crossing (deferred resolution grace) */
+  JUMP_POST_GRACE_MS: 250,
 
   /** low-impact: heel rise (k units) that triggers / is clean */
   HEEL_TRIGGER: 0.06,

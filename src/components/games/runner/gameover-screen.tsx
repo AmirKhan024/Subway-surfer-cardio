@@ -8,6 +8,7 @@
  */
 import type { RunnerRawData } from '@/types/raw-data';
 import { COURSE } from './runner-constants';
+import { CopyDiagnosticsButton, LogsPanel } from './diagnostics-widgets';
 
 function BigStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
@@ -70,6 +71,11 @@ export default function GameOverScreen({
           >
             Run again
           </button>
+        </div>
+
+        <div className="mt-4">
+          <CopyDiagnosticsButton />
+          <LogsPanel />
         </div>
       </div>
     </main>
