@@ -47,7 +47,6 @@ export default function RunnerLayer({
   onExit,
   onFallbackKeyboard,
 }: RunnerLayerProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -117,13 +116,29 @@ export default function RunnerLayer({
 
   // ── engine + scene + game loop ─────────────────────────────────────────
   useEffect(() => {
-    if (!canvasRef.current) return;
-    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!container) return;
+    // Create a FRESH canvas per mount: StrictMode double-mounts the effect,
+    // and after cleanup's forceContextLoss() the old canvas can never hand
+    // out a new WebGL context ("reading 'precision'" crash).
+    const canvas = document.createElement('canvas');
+    canvas.className = 'absolute inset-0 h-full w-full';
+    container.insertBefore(canvas, container.firstChild);
     const engine = new RunnerEngine({ seed, controlMode, lowImpact });
     engine.setDebug(debug);
     engine.setBobScale(bobScale);
     engineRef.current = engine;
-    const scene = new RunnerScene(canvas);
+    let scene: RunnerScene;
+    try {
+      scene = new RunnerScene(canvas);
+    } catch (err) {
+      canvas.remove();
+      setPoseError(
+        'WebGL is unavailable in this browser — the 3D world cannot start. Try a different browser or enable hardware acceleration.',
+      );
+      console.error('[RunnerLayer] WebGL init failed:', err);
+      return;
+    }
     sceneRef.current = scene;
 
     const detachKb =
@@ -229,6 +244,7 @@ export default function RunnerLayer({
       detachKb();
       scene.dispose();
       sceneRef.current = null;
+      canvas.remove();
       engine.destroy();
       engineRef.current = null;
     };
@@ -242,7 +258,7 @@ export default function RunnerLayer({
   // ── render ─────────────────────────────────────────────────────────────
   return (
     <div ref={containerRef} className="fixed inset-0 overflow-hidden bg-slate-950">
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+      {/* WebGL canvas is created imperatively in the effect (fresh per mount) */}
       <canvas ref={debugCanvasRef} className="pointer-events-none absolute inset-0 z-20 h-full w-full" />
       {/* hidden camera feed (pose mode) — PiP draws from it */}
       <video ref={videoRef} playsInline muted className="hidden" />

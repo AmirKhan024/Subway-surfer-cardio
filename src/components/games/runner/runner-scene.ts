@@ -34,20 +34,17 @@ export class RunnerScene {
   private disposed = false;
 
   constructor(canvas: HTMLCanvasElement) {
+    const w = canvas.clientWidth || window.innerWidth;
+    const h = canvas.clientHeight || window.innerHeight;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+    this.renderer.setSize(w, h, false);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(HORIZON);
     this.scene.fog = new THREE.Fog(HORIZON, FOG_NEAR, FOG_FAR);
 
-    this.camera = new THREE.PerspectiveCamera(
-      65,
-      canvas.clientWidth / canvas.clientHeight,
-      0.1,
-      160,
-    );
+    this.camera = new THREE.PerspectiveCamera(65, w / h, 0.1, 160);
     this.camera.position.set(0, 1.6, 0);
 
     const sun = new THREE.DirectionalLight(0xffffff, 2.2);
