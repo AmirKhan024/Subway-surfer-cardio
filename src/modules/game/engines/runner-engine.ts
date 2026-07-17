@@ -230,6 +230,15 @@ export class RunnerEngine implements GameEngine {
     this.debug = v;
   }
 
+  /**
+   * Camera-bob amplitude 0..1 (comfort/accessibility; respects
+   * prefers-reduced-motion upstream). Scales the FEEDBACK only — detection
+   * gates and scoring are untouched.
+   */
+  setBobScale(v: number): void {
+    this.bobScale = clamp01(v);
+  }
+
   setControlInput(input: Partial<ControlInput>): void {
     if (input.crouchHeld !== undefined) this.input.crouchHeld = input.crouchHeld;
     if (input.jumpPressed) this.input.jumpPressed = true;
@@ -713,15 +722,17 @@ export class RunnerEngine implements GameEngine {
   private cameraY: number = CAMERA.EYE;
   private cameraPitch = 0;
   private fov: number = CAMERA.FOV_BASE;
+  private bobScale = 1;
 
   private updateCameraFeel(dt: number): void {
     const targetY =
-      CAMERA.EYE -
-      CAMERA.CROUCH_DIP * this.crouch +
-      (this.jumpY() / DETECT.JUMP_APEX) * CAMERA.JUMP_RISE_M;
+      CAMERA.EYE +
+      this.bobScale *
+        (-CAMERA.CROUCH_DIP * this.crouch +
+          (this.jumpY() / DETECT.JUMP_APEX) * CAMERA.JUMP_RISE_M);
     const a = Math.min(1, dt * CAMERA.DAMP);
     this.cameraY += (targetY - this.cameraY) * a;
-    const targetPitch = CAMERA.PITCH_CROUCH * this.crouch;
+    const targetPitch = CAMERA.PITCH_CROUCH * this.crouch * this.bobScale;
     this.cameraPitch += (targetPitch - this.cameraPitch) * a;
     const speedNorm =
       (this.speed - COURSE.SPEED_START) / (COURSE.SPEED_END - COURSE.SPEED_START);

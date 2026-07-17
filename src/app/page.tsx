@@ -55,6 +55,7 @@ export default function Home() {
         controlMode={mode}
         lowImpact={profile.lowImpact}
         seed={seedForAttempt(attempt)}
+        bobScale={profile.bobScale}
         debug={debug}
         onComplete={handleComplete}
         onExit={() => setScreen('start')}

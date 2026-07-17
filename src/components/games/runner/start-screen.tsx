@@ -12,6 +12,8 @@ export interface RunnerProfile {
   age: number;
   gender: 'male' | 'female' | 'other';
   lowImpact: boolean;
+  /** camera-bob amplitude: 1 full, 0.4 gentle, 0 off */
+  bobScale: number;
 }
 
 const PROFILE_KEY = 'kr1-profile';
@@ -44,6 +46,7 @@ export default function StartScreen({
   const [age, setAge] = useState<string>('35');
   const [gender, setGender] = useState<RunnerProfile['gender']>('male');
   const [lowImpact, setLowImpact] = useState(false);
+  const [bobScale, setBobScale] = useState(1);
 
   useEffect(() => {
     const saved = loadProfile();
@@ -51,13 +54,16 @@ export default function StartScreen({
       setAge(String(saved.age));
       setGender(saved.gender);
       setLowImpact(saved.lowImpact);
+      setBobScale(saved.bobScale ?? 1);
+    } else if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setBobScale(0.4); // respect reduced-motion by default
     }
   }, []);
 
   const start = (mode: 'keyboard' | 'pose') => {
     const parsed = Math.round(Number(age));
     const validAge = Number.isFinite(parsed) && parsed >= 5 && parsed <= 110 ? parsed : 35;
-    const profile: RunnerProfile = { age: validAge, gender, lowImpact };
+    const profile: RunnerProfile = { age: validAge, gender, lowImpact, bobScale };
     saveProfile(profile);
     onPlay(profile, mode);
   };
@@ -106,6 +112,19 @@ export default function StartScreen({
             className="h-4 w-4 accent-cyan-500"
           />
           Low-impact mode — heel-raise instead of jump
+        </label>
+
+        <label className="mt-3 block text-sm text-slate-300">
+          View movement (camera bob)
+          <select
+            value={String(bobScale)}
+            onChange={(e) => setBobScale(Number(e.target.value))}
+            className="mt-1 w-full rounded-lg border border-white/15 bg-slate-900 px-3 py-2 text-slate-50"
+          >
+            <option value="1">Full — view dips and rises with you</option>
+            <option value="0.4">Gentle — reduced motion</option>
+            <option value="0">Off — steady camera</option>
+          </select>
         </label>
 
         {/* CTAs */}

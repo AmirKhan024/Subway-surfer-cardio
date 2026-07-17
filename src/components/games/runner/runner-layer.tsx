@@ -29,6 +29,8 @@ export interface RunnerLayerProps {
   controlMode: ControlMode;
   lowImpact: boolean;
   seed: number;
+  /** camera-bob amplitude 0..1 (comfort setting) */
+  bobScale?: number;
   debug?: boolean;
   onComplete: (raw: RunnerRawData) => void;
   onExit: () => void;
@@ -39,6 +41,7 @@ export default function RunnerLayer({
   controlMode,
   lowImpact,
   seed,
+  bobScale = 1,
   debug = false,
   onComplete,
   onExit,
@@ -118,6 +121,7 @@ export default function RunnerLayer({
     const canvas = canvasRef.current;
     const engine = new RunnerEngine({ seed, controlMode, lowImpact });
     engine.setDebug(debug);
+    engine.setBobScale(bobScale);
     engineRef.current = engine;
     const scene = new RunnerScene(canvas);
     sceneRef.current = scene;
@@ -229,7 +233,7 @@ export default function RunnerLayer({
       engineRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controlMode, lowImpact, seed, debug]);
+  }, [controlMode, lowImpact, seed, debug, bobScale]);
 
   const retryCalibration = useCallback(() => {
     engineRef.current?.resetCalibration();
