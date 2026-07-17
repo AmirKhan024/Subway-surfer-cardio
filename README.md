@@ -1,6 +1,8 @@
 # Kriya Runner — Level 1
 
-A **first-person, body-controlled endless runner** for Kriya.care: the webcam watches you — **squat to slide under the amber beams, jump to clear the cyan hurdles**. One run generates real assessment signal (squat → mobility, jump → power, timing → reflex) and ends in a Kriya-style **musculage** report computed by a local mirror of the production scoring pipeline.
+**▶ Play it live: [kriya-runner.vercel.app](https://kriya-runner.vercel.app)**
+
+A **first-person, body-controlled endless runner** for Kriya.care: the webcam watches you — **squat to slide under the amber beams, jump to clear the cyan hurdles**. One run generates real assessment signal (squat → mobility, jump → power, timing → reflex) and ends in a Kriya-style **Muscle Age** report computed by a local mirror of the production scoring pipeline.
 
 **Standalone by design**: no DB, no auth, no API. Zip it, `npm i && npm run dev`, play.
 
@@ -9,20 +11,23 @@ A **first-person, body-controlled endless runner** for Kriya.care: the webcam wa
 ```bash
 npm install
 npm run dev        # http://localhost:3000
-npm test           # 48 vitest tests (engine + scoring, headless)
+npm test           # 88 vitest tests (engine + scoring + media, headless)
 npm run typecheck  # tsc --noEmit
 npm run build
 ```
 
+## The flow
+
+**HOME** (pick Body Control or Neck Workout) → **SETUP** (age + gender, Start, optional How-to-play demo video) → calibration → countdown → run → **GAME OVER** → **REPORT** (animated Muscle-Age ring, age-comparison bar, friendly stats).
+
 - **Body control** needs camera permission + internet on first run (MediaPipe WASM + `pose_landmarker_lite` load from CDN, then cache).
-- **Head / neck control** (`KR1N`, ROM category): look **up** to jump, look **down** to duck — a neck-ROM exercise that works **seated** (calibration needs only head + shoulders). Extension→jump is a gentle **position** trigger (no velocity term — nothing rewards fast/jerky neck movement); "clean" is judged on raw neck excursion against comfortable sub-maximal targets. Recorded ranges are a **relative head-movement proxy** (nose-vs-shoulder, normalized), NOT goniometric cervical ROM. Prod's Neck Compass (FA3) measures yaw rotation, so this pitch signal is new; the torso-invariant nose-vs-ear candidate is shown in `?debug=1` for webcam comparison.
-- **Keyboard mode**: `↑ / Space / W` jump · `↓ / S (hold)` squat — works offline, also the accessibility/dev path.
-- **Diagnostics**: every finished run prints a `===== KRIYA RUN REPORT =====` console group (config, raw data, all scoring intermediates, per-obstacle gate values, health warnings), and the report screen's **"Copy diagnostics"** button copies a paste-ready blob — play, copy, paste to the developer.
+- **Neck workout** (`KR1N`, ROM category): look **up** to jump, look **down** to duck — a neck-ROM exercise that works **seated** (calibration needs only head + shoulders). Extension→jump is a gentle **position** trigger (no velocity term — nothing rewards fast/jerky neck movement); "clean" is judged on raw neck excursion against comfortable sub-maximal targets. Recorded ranges are a **relative head-movement proxy** (nose-vs-shoulder, normalized), NOT goniometric cervical ROM. Prod's Neck Compass (FA3) measures yaw rotation, so this pitch signal is new; the torso-invariant nose-vs-ear candidate is shown in `?debug=1` for webcam comparison.
+- **Keyboard input** is no longer a product mode — it survives as the engine's internal synthetic path (`setControlInput`), which is what the headless test suite drives for determinism/parity tests.
+- **Mode-aware media**: per-mode demo video on SETUP (iOS-safe muted+playsInline autoplay, poster fallback, reduced-motion → poster) and circular cue icons in the play HUD (preloaded+decoded at the start click; webp → png → arrow-glyph fallback chain). One `MODE_MEDIA` map drives it all.
+- **Diagnostics** (dev-only UI, add `?debug=1`): every finished run prints a `===== KRIYA RUN REPORT =====` console group (config, raw data, all scoring intermediates, per-obstacle gate values, health warnings); with the flag, **Copy diagnostics / View logs** buttons appear on the game-over and report screens — play, copy, paste to the developer. `?debug=1` also overlays live crouch/jump bars + gate lines for threshold tuning.
 - **Coins** (engagement only — provably never scored; a test pins identical musculage for any coin count): seeded ground lines in the obstacle gaps (kept clear of every action plane) + one aerial coin past each hurdle that only a real jump/look-up grabs. Spinning gold rings, collect-pop, HUD/game-over/report counters.
-- **Audio** (100% license-free): all sound is **synthesized Web Audio** — no asset files, no attribution. SFX = short procedural blips (coin ping, jump sweep, squat tone, life thud, game-over sting, countdown); music = gentle synthesized ambient pad (Cmaj7→Am7→Fmaj7→G, low-pass filtered, slow fades). Sound toggle on Start, mute chip in-game, prefs persisted. Engine never imports audio (purity pinned by a test) — the layer maps drained engine events to SFX.
-- **Game-over screen**: celebratory "Run Complete" / encouraging "Game Over" beat (distance, coins, cleared, hearts) between the run and the clinical report.
-- **`?debug=1`** overlays live crouch/jump bars + gate lines for on-device threshold tuning.
-- **Low-impact mode** replaces jumps with heel-raises. Camera-bob has Full/Gentle/Off (defaults to Gentle under `prefers-reduced-motion`).
+- **Audio** (100% license-free): all sound is **synthesized Web Audio** — no asset files, no attribution. SFX = short procedural blips (coin ping, jump sweep, squat tone, life thud, game-over sting, countdown); music = gentle synthesized ambient pad (Cmaj7→Am7→Fmaj7→G, low-pass filtered, slow fades). Persistent mute chip on every screen, prefs persisted. Engine never imports audio (purity pinned by a test) — the layer maps drained engine events to SFX.
+- **Accessibility**: `prefers-reduced-motion` disables camera bob, screen transitions, demo-video autoplay, and the report ring/count-up animation (final values shown instantly). The engine's low-impact (heel-raise) capability is kept dormant behind the always-false profile flag.
 
 ## Architecture (mirrors production kriya-v3)
 
