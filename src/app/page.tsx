@@ -128,7 +128,7 @@ export default function Home() {
   const [mode, setMode] = useState<PlayMode>('pose');
   const [attempt, setAttempt] = useState(0);
   const [lastRaw, setLastRaw] = useState<RunnerRawData | null>(null);
-  const [endReason, setEndReason] = useState<'time' | 'lives' | 'course' | null>(null);
+  const [endReason, setEndReason] = useState<'time' | 'lives' | null>(null);
   const [debug] = useState(
     () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug'),
   );
@@ -153,7 +153,7 @@ export default function Home() {
   }, []);
 
   const handleComplete = useCallback(
-    (raw: RunnerRawData, reason: 'time' | 'lives' | 'course' | null) => {
+    (raw: RunnerRawData, reason: 'time' | 'lives' | null) => {
       if (profile) emitRunReport(raw, profile, mode, attempt, debug);
       setLastRaw(raw);
       setEndReason(reason);

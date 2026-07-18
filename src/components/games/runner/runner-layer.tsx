@@ -65,7 +65,7 @@ export interface RunnerLayerProps {
   /** active-workout session length in seconds (game-clock time) */
   sessionSec?: number;
   debug?: boolean;
-  onComplete: (raw: RunnerRawData, reason: 'time' | 'lives' | 'course' | null) => void;
+  onComplete: (raw: RunnerRawData, reason: 'time' | 'lives' | null) => void;
   onExit: () => void;
   /** pause-menu Restart → fresh run, same settings, rotated seed */
   onRestart: () => void;
@@ -344,7 +344,6 @@ export default function RunnerLayer({
           distance: s.distance,
           lives: s.lives,
           cleared: (m.cleared as number) ?? 0,
-          total: (m.total as number) ?? 0,
           cue: s.cue,
           lowImpact: s.lowImpact,
           headMode: controlMode === 'head',

@@ -39,27 +39,40 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-/** Speed at obstacle index i (linear ramp across the course). */
-export function speedAtIndex(i: number): number {
-  const t = COURSE.OBSTACLES <= 1 ? 0 : i / (COURSE.OBSTACLES - 1);
+/** Speed at a world distance (linear ramp over a FIXED distance — endless-safe). */
+export function speedAtDistance(d: number): number {
+  const t = Math.max(0, Math.min(1, d / COURSE.RAMP_DISTANCE_M));
   return COURSE.SPEED_START + (COURSE.SPEED_END - COURSE.SPEED_START) * t;
 }
 
+/** Per-chunk RNG stream: deterministic for (seed, chunkIndex), independent
+ *  across chunks so a run is reproducible for its seed. */
+function chunkRng(seed: number, chunkIndex: number): () => number {
+  return mulberry32((seed ^ Math.imul(chunkIndex + 1, 0x85ebca6b)) >>> 0);
+}
+
 /**
- * Generate the fixed 20-obstacle course for a seed.
- * Matched difficulty across seeds: exactly half hurdles / half beams,
- * never 3 of the same type in a row, and every gap >= MIN_GAP_S at the
+ * Generate one obstacle CHUNK (endless mode appends these as you run).
+ * Matched difficulty per chunk: exactly half hurdles / half beams, never
+ * 3 of a type in a row within the chunk, and every gap >= MIN_GAP_S at the
  * local speed so a full human rep always fits between obstacles.
+ * The first obstacle sits one gap past `startDistance`; ids continue from
+ * `startId` so scene mesh keys stay globally unique.
  */
-export function generateCourse(seed: number): Obstacle[] {
-  const rng = mulberry32(seed);
+export function generateChunk(
+  seed: number,
+  chunkIndex: number,
+  startDistance: number,
+  startId: number,
+): Obstacle[] {
+  const rng = chunkRng(seed, chunkIndex);
   const n = COURSE.OBSTACLES;
 
   // 10/10 type mix, seeded, with two hard constraints: never 3 of a type in
   // a row, and never paint into a corner where the tail would force one.
   // Feasibility: a run of type T needs separators from the other type O, so
   // remaining[T] <= 2*(remaining[O]+1) - trailingRun(T) must hold after
-  // every pick.
+  // every pick. (Cross-chunk 3-runs are possible at seams — rare + harmless.)
   const remaining: Record<ObstacleType, number> = { hurdle: n / 2, beam: n / 2 };
   const types: ObstacleType[] = [];
   const other = (t: ObstacleType): ObstacleType => (t === 'hurdle' ? 'beam' : 'hurdle');
@@ -87,13 +100,22 @@ export function generateCourse(seed: number): Obstacle[] {
   }
 
   const obstacles: Obstacle[] = [];
-  let d = COURSE.LEAD_IN_M;
+  let d = startDistance;
   for (let i = 0; i < n; i++) {
-    obstacles.push({ id: i, type: types[i], atDistance: d });
-    const gapSeconds = COURSE.MIN_GAP_S + rng() * COURSE.EXTRA_GAP_S;
-    d += speedAtIndex(i) * gapSeconds;
+    if (i > 0 || chunkIndex > 0) {
+      // chunk 0 places its first obstacle exactly at the lead-in distance;
+      // later chunks (and every subsequent obstacle) space by a paced gap
+      const gapSeconds = COURSE.MIN_GAP_S + rng() * COURSE.EXTRA_GAP_S;
+      d += speedAtDistance(d) * gapSeconds;
+    }
+    obstacles.push({ id: startId + i, type: types[i], atDistance: d });
   }
   return obstacles;
+}
+
+/** Chunk 0 (compat wrapper) — the run's opening obstacles from the lead-in. */
+export function generateCourse(seed: number): Obstacle[] {
+  return generateChunk(seed, 0, COURSE.LEAD_IN_M, 0);
 }
 
 /** Total course length in meters (last obstacle + a short run-out). */
@@ -110,9 +132,19 @@ export function courseLength(obstacles: Obstacle[]): number {
  * the obstacle course for a given seed.
  */
 export function generateCoins(seed: number, obstacles: Obstacle[]): Coin[] {
-  const rng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
+  return coinsForChunk(seed, 0, obstacles, 0);
+}
+
+/** Chunk-aware coin placement; ids continue from startId (scene mesh keys). */
+export function coinsForChunk(
+  seed: number,
+  chunkIndex: number,
+  obstacles: Obstacle[],
+  startId: number,
+): Coin[] {
+  const rng = mulberry32((seed ^ 0x9e3779b9 ^ Math.imul(chunkIndex, 0xc2b2ae35)) >>> 0);
   const coins: Coin[] = [];
-  let id = 0;
+  let id = startId;
 
   for (let i = 0; i < obstacles.length; i++) {
     // aerial coin above/just past each hurdle

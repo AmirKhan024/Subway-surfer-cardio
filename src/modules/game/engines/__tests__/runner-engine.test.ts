@@ -9,8 +9,9 @@ import { readFileSync } from 'node:fs';
 import { RunnerEngine } from '../runner-engine';
 import {
   generateCourse,
+  generateChunk,
   generateCoins,
-  speedAtIndex,
+  speedAtDistance,
   mulberry32,
   seedForAttempt,
 } from '../runner-timeline';
@@ -92,7 +93,7 @@ describe('runner-timeline', () => {
     expect(generateCourse(1337)).not.toEqual(generateCourse(2861));
   });
 
-  it('every pool seed yields a matched-difficulty course', () => {
+  it('every pool seed yields a matched-difficulty chunk (endless stream)', () => {
     for (const seed of COURSE.SEED_POOL) {
       const course = generateCourse(seed);
       expect(course).toHaveLength(COURSE.OBSTACLES);
@@ -100,7 +101,8 @@ describe('runner-timeline', () => {
       expect(hurdles).toBe(COURSE.OBSTACLES / 2);
       for (let i = 1; i < course.length; i++) {
         const gapSeconds =
-          (course[i].atDistance - course[i - 1].atDistance) / speedAtIndex(i - 1);
+          (course[i].atDistance - course[i - 1].atDistance) /
+          speedAtDistance(course[i - 1].atDistance);
         expect(gapSeconds).toBeGreaterThanOrEqual(COURSE.MIN_GAP_S - 1e-9);
       }
       // movement-paced: never 3 identical types in a row
@@ -110,6 +112,19 @@ describe('runner-timeline', () => {
         expect(same).toBe(false);
       }
     }
+  });
+
+  it('chunks are deterministic, id-continuous, and movement-paced at the seam', () => {
+    const c0 = generateChunk(1337, 0, COURSE.LEAD_IN_M, 0);
+    const c1a = generateChunk(1337, 1, c0[c0.length - 1].atDistance, c0.length);
+    const c1b = generateChunk(1337, 1, c0[c0.length - 1].atDistance, c0.length);
+    expect(c1a).toEqual(c1b); // reproducible per (seed, chunk)
+    expect(c1a[0].id).toBe(c0.length); // globally unique ids for scene keys
+    // seam gap is paced like any other gap
+    const seamGapS =
+      (c1a[0].atDistance - c0[c0.length - 1].atDistance) /
+      speedAtDistance(c0[c0.length - 1].atDistance);
+    expect(seamGapS).toBeGreaterThanOrEqual(COURSE.MIN_GAP_S - 1e-9);
   });
 
   it('mulberry32 is deterministic and in [0,1)', () => {
@@ -220,11 +235,13 @@ describe('engine purity — audio never enters the engine', () => {
 
 // ── keyboard mode: world sim, gates, lives ─────────────────────────────────
 
-/** Perfect-player bot: squat on beam cues, jump near hurdle planes. */
+/** Perfect-player bot: squat on beam cues, jump near hurdle planes.
+ *  Endless mode: a 60s session bounds every bot run (lives may end sooner). */
 function runKeyboardBot(
   engine: RunnerEngine,
   behavior: 'perfect' | 'idle',
 ): { frames: number } {
+  engine.setSessionMs(60_000);
   engine.startPlaying();
   let t = 1000;
   let jumpedFor = -1;
@@ -252,13 +269,13 @@ describe('RunnerEngine — keyboard mode', () => {
     expect(engine.processCalibration([]).isReady).toBe(true);
   });
 
-  it('perfect play clears the whole 20-obstacle course with 3 lives intact', () => {
+  it('perfect play survives the full session with 3 lives intact (endless)', () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
     runKeyboardBot(engine, 'perfect');
     expect(engine.isComplete()).toBe(true);
+    expect(engine.getEndReason()).toBe('time'); // never 'lives' for a perfect run
     const raw = engine.getRawData();
-    expect(raw.obstaclesTotal).toBe(20);
-    expect(raw.obstaclesCleared).toBe(20);
+    expect(raw.obstaclesCleared).toBeGreaterThanOrEqual(15); // ~60s of obstacles
     expect(raw.obstaclesFailed).toBe(0);
     expect(engine.getSceneState().lives).toBe(3);
     expect(raw.distance).toBeGreaterThan(0);
@@ -281,7 +298,8 @@ describe('RunnerEngine — keyboard mode', () => {
     for (const seed of COURSE.SEED_POOL) {
       const engine = new RunnerEngine({ controlMode: 'keyboard', seed });
       runKeyboardBot(engine, 'perfect');
-      expect(engine.getRawData().obstaclesCleared).toBe(20);
+      expect(engine.getRawData().obstaclesFailed).toBe(0);
+      expect(engine.getRawData().obstaclesCleared).toBeGreaterThanOrEqual(15);
     }
   });
 
@@ -527,9 +545,10 @@ describe('RunnerEngine — camera feel (hip-bob)', () => {
 // ── keyboard/pose parity: a pose-driven bot clears the full course ─────────
 
 describe('RunnerEngine — pose bot parity', () => {
-  it('a scripted body (pose frames only) clears all 20 obstacles like the keyboard bot', () => {
+  it('a scripted body (pose frames only) clears obstacles like the keyboard bot', () => {
     const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
     let t = calibrate(engine);
+    engine.setSessionMs(60_000);
     engine.startPlaying();
 
     let hipY = 0.6;
@@ -565,11 +584,11 @@ describe('RunnerEngine — pose bot parity', () => {
 
     const raw = engine.getRawData();
     expect(engine.isComplete()).toBe(true);
-    expect(raw.obstaclesCleared).toBe(20);
+    expect(raw.obstaclesCleared).toBeGreaterThanOrEqual(12);
     expect(raw.obstaclesFailed).toBe(0);
     expect(raw.controlModeKeyboard).toBe(0);
-    expect(raw.squatReps).toBeGreaterThanOrEqual(9); // one per beam (10), FSM-counted
-    expect(raw.jumpReps).toBeGreaterThanOrEqual(10);
+    expect(raw.squatReps).toBeGreaterThanOrEqual(6); // one per beam, FSM-counted
+    expect(raw.jumpReps).toBeGreaterThanOrEqual(6);
     expect(raw.avgReactionMs).toBeGreaterThan(0);
   });
 });
@@ -613,14 +632,17 @@ describe('RunnerEngine — metrics math', () => {
       t += FRAME_MS;
       engine.processFrame([], t);
     }
+    // release so the squat rep completes (reps bank on return-to-neutral)
+    engine.setControlInput({ crouchHeld: false });
+    for (let i = 0; i < 20; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
     const raw = engine.getRawData();
-    // squat reaction only (jump reactions belong to earlier hurdle cues, so
-    // isolate: reaction list holds one entry per responded cue — assert the
-    // scripted 330ms delay dominates the expected window)
-    expect(raw.avgReactionMs).toBeGreaterThan(0);
-    // the squat initiation fired 11 frames (363ms) after cue-shown ± a frame
-    // (avg includes reflexive jump responses at ~1 frame each)
-    expect(raw.squatReps + raw.jumpReps).toBeGreaterThan(0);
+    // the squat initiation fired 11 frames (~363ms) after cue-shown ± a frame
+    expect(raw.avgReactionMs).toBeGreaterThan(300);
+    expect(raw.avgReactionMs).toBeLessThan(500);
+    expect(raw.squatReps).toBeGreaterThanOrEqual(1);
   });
 
   it('cleanFormRate separates cleared-but-not-clean squats (shallow holds)', () => {
@@ -661,13 +683,17 @@ describe('RunnerEngine — metrics math', () => {
 function runFirstHurdleTimingBot(
   engine: RunnerEngine,
   timing: { atTtaS?: number; atMsPast?: number },
-): number {
+): { firstHurdleId: number; obstacleEvents: Map<number, Record<string, unknown>> } {
+  engine.setSessionMs(60_000); // endless mode: the session bounds the run
   engine.startPlaying();
   let t = 1000;
   let frames = 0;
   let firstHurdleId = -1;
   let jumpedFirst = false;
   let jumpedFor = -1;
+  // scene state is WINDOWED in endless mode (passed obstacles drop out), so
+  // final assertions come from the OBSTACLE event stream, not the scene
+  const obstacleEvents = new Map<number, Record<string, unknown>>();
   while (!engine.isComplete() && frames < 12000) {
     frames++;
     t += FRAME_MS;
@@ -676,11 +702,11 @@ function runFirstHurdleTimingBot(
       const hurdles = s.obstacles.filter((o) => o.type === 'hurdle');
       firstHurdleId = hurdles.reduce((a, b) => (a.zAhead < b.zAhead ? a : b)).id;
     }
-    const first = s.obstacles.find((o) => o.id === firstHurdleId)!;
+    const first = s.obstacles.find((o) => o.id === firstHurdleId);
     const cue = s.cue;
     engine.setControlInput({ crouchHeld: cue?.type === 'beam' });
 
-    if (!jumpedFirst && !first.resolved) {
+    if (!jumpedFirst && first && !first.resolved) {
       if (timing.atTtaS !== undefined && first.zAhead > 0 && first.zAhead / s.speed <= timing.atTtaS) {
         jumpedFirst = true;
         engine.setControlInput({ jumpPressed: true });
@@ -699,42 +725,37 @@ function runFirstHurdleTimingBot(
       engine.setControlInput({ jumpPressed: true });
     }
     engine.processFrame([], t);
+    for (const e of engine.drainEvents()) {
+      if (e.tag === 'OBSTACLE') obstacleEvents.set(e.data.id as number, e.data);
+    }
   }
-  return firstHurdleId;
+  return { firstHurdleId, obstacleEvents };
 }
 
 describe('RunnerEngine — intent-based hurdle clearing', () => {
   it("REGRESSION (Govind's bug): a jump initiated 0.70s before the plane now CLEARS", () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
-    const firstHurdleId = runFirstHurdleTimingBot(engine, { atTtaS: 0.7 });
-    const first = engine.getSceneState().obstacles.find((o) => o.id === firstHurdleId)!;
-    expect(first.cleared).toBe(true);
+    const { firstHurdleId, obstacleEvents } = runFirstHurdleTimingBot(engine, { atTtaS: 0.7 });
+    expect(obstacleEvents.get(firstHurdleId)?.cleared).toBe(true);
     expect(engine.getRawData().obstaclesFailed).toBe(0);
   });
 
   it('a jump ~100ms AFTER the crossing retro-clears within the grace window', () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
-    const firstHurdleId = runFirstHurdleTimingBot(engine, { atMsPast: 100 });
-    const first = engine.getSceneState().obstacles.find((o) => o.id === firstHurdleId)!;
+    const { firstHurdleId, obstacleEvents } = runFirstHurdleTimingBot(engine, { atMsPast: 100 });
+    const first = obstacleEvents.get(firstHurdleId)!;
     expect(first.cleared).toBe(true);
+    expect(first.retroCleared).toBe(true);
     expect(engine.getRawData().obstaclesFailed).toBe(0);
-    const retro = engine
-      .drainEvents()
-      .find((e) => e.tag === 'OBSTACLE' && (e.data as { id: number }).id === firstHurdleId);
-    expect((retro!.data as { retroCleared?: boolean }).retroCleared).toBe(true);
   });
 
   it('no jump at all still fails the hurdle (after the grace) — honesty preserved', () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
-    const firstHurdleId = runFirstHurdleTimingBot(engine, {});
-    const first = engine.getSceneState().obstacles.find((o) => o.id === firstHurdleId)!;
+    const { firstHurdleId, obstacleEvents } = runFirstHurdleTimingBot(engine, {});
+    const first = obstacleEvents.get(firstHurdleId)!;
     expect(first.cleared).toBe(false);
-    const raw = engine.getRawData();
-    expect(raw.obstaclesFailed).toBe(1);
-    const fail = engine
-      .drainEvents()
-      .find((e) => e.tag === 'OBSTACLE' && (e.data as { id: number }).id === firstHurdleId);
-    expect((fail!.data as { graceExpired?: boolean }).graceExpired).toBe(true);
+    expect(first.graceExpired).toBe(true);
+    expect(engine.getRawData().obstaclesFailed).toBe(1);
   });
 
   it('re-arm forgiveness: landing into a slight crouch no longer wedges the jump disarmed', () => {
@@ -755,6 +776,7 @@ describe('RunnerEngine — intent-based hurdle clearing', () => {
   it('head mode: an early look-up (short, returned to neutral) still clears every hurdle', () => {
     const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
     let t = calibrateHead(engine);
+    engine.setSessionMs(60_000);
     engine.startPlaying();
     let pitchK = 0.5;
     let lookUpScript: number[] = [];
@@ -780,7 +802,7 @@ describe('RunnerEngine — intent-based hurdle clearing', () => {
       engine.processFrame(makeHeadFrame({ pitchK }), t);
     }
     const raw = engine.getRawData();
-    expect(raw.obstaclesCleared).toBe(20);
+    expect(raw.obstaclesCleared).toBeGreaterThanOrEqual(12);
     expect(raw.obstaclesFailed).toBe(0);
   });
 });
@@ -940,9 +962,10 @@ describe('RunnerEngine — head mode detection', () => {
 });
 
 describe('RunnerEngine — head-bot clears the course (parity)', () => {
-  it('a scripted head (pose frames only) clears all 20 obstacles', () => {
+  it('a scripted head (pose frames only) clears obstacles without a single fail', () => {
     const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
     let t = calibrateHead(engine);
+    engine.setSessionMs(60_000);
     engine.startPlaying();
 
     let pitchK = 0.5;
@@ -978,7 +1001,7 @@ describe('RunnerEngine — head-bot clears the course (parity)', () => {
 
     const raw = engine.getRawData();
     expect(engine.isComplete()).toBe(true);
-    expect(raw.obstaclesCleared).toBe(20);
+    expect(raw.obstaclesCleared).toBeGreaterThanOrEqual(12);
     expect(raw.obstaclesFailed).toBe(0);
     expect(raw.testId).toBe('KR1N');
     expect(raw.controlScheme).toBe(2);
@@ -1001,7 +1024,7 @@ describe('RunnerEngine — diagnostic events', () => {
     expect(tags).toContain('RUN_RESET');
     expect(tags).toContain('RUN_DONE');
     const obstacles = events.filter((e) => e.tag === 'OBSTACLE');
-    expect(obstacles).toHaveLength(20);
+    expect(obstacles.length).toBeGreaterThanOrEqual(15); // ~60s of endless obstacles
     for (const ob of obstacles) {
       expect(ob.data.cleared).toBe(true);
       expect(typeof ob.data.crouchAtGate).toBe('number');
@@ -1009,7 +1032,7 @@ describe('RunnerEngine — diagnostic events', () => {
       expect(typeof ob.data.livesLeft).toBe('number');
     }
     const reps = events.filter((e) => e.tag === 'REP');
-    expect(reps.length).toBeGreaterThanOrEqual(20);
+    expect(reps.length).toBeGreaterThanOrEqual(15);
     for (const rep of reps) {
       expect(['squat', 'jump', 'heel']).toContain(rep.data.kind);
       expect(typeof rep.data.clean).toBe('boolean');
@@ -1207,12 +1230,14 @@ describe('RunnerEngine — game clock (runActive gate + pause + session timer)',
 
   it('a freeze during the post-crossing jump grace never causes an unfair fail', () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
     engine.startPlaying();
     let t = 1000;
     let firstHurdleId = -1;
     let stage: 'run' | 'frozen' | 'after' = 'run';
     let pausedFrames = 0;
     let jumpedFor = -1;
+    const obstacleEvents = new Map<number, Record<string, unknown>>();
     for (let frames = 0; frames < 12000 && !engine.isComplete(); frames++) {
       t += FRAME_MS;
       const s = engine.getSceneState();
@@ -1220,7 +1245,7 @@ describe('RunnerEngine — game clock (runActive gate + pause + session timer)',
         const hurdles = s.obstacles.filter((o) => o.type === 'hurdle');
         firstHurdleId = hurdles.reduce((a, b) => (a.zAhead < b.zAhead ? a : b)).id;
       }
-      const first = s.obstacles.find((o) => o.id === firstHurdleId)!;
+      const first = s.obstacles.find((o) => o.id === firstHurdleId);
       const cue = s.cue;
       engine.setControlInput({ crouchHeld: cue?.type === 'beam' });
       // play every OTHER hurdle perfectly
@@ -1233,7 +1258,7 @@ describe('RunnerEngine — game clock (runActive gate + pause + session timer)',
         jumpedFor = cue.obstacleId;
         engine.setControlInput({ jumpPressed: true });
       }
-      if (stage === 'run' && !first.resolved && first.zAhead <= 0) {
+      if (stage === 'run' && first && !first.resolved && first.zAhead <= 0) {
         // crossed the first hurdle WITHOUT jumping → inside the 250ms grace.
         // Freeze ~100ms into it for ~1s (far beyond the nominal grace).
         if ((-first.zAhead / s.speed) * 1000 >= 100) {
@@ -1249,11 +1274,12 @@ describe('RunnerEngine — game clock (runActive gate + pause + session timer)',
         }
       }
       engine.processFrame([], t);
+      for (const e of engine.drainEvents()) {
+        if (e.tag === 'OBSTACLE') obstacleEvents.set(e.data.id as number, e.data);
+      }
     }
-    const s = engine.getSceneState();
-    const first = s.obstacles.find((o) => o.id === firstHurdleId)!;
     // the grace window was shifted by the frozen span → the resume-jump retro-clears
-    expect(first.resolved).toBe(true);
+    const first = obstacleEvents.get(firstHurdleId)!;
     expect(first.cleared).toBe(true);
     expect(engine.getRawData().obstaclesFailed).toBe(0);
   });

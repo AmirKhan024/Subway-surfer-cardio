@@ -71,7 +71,7 @@ export default function GameOverScreen({
         <div className="mt-6 grid grid-cols-3 gap-2 sm:gap-3">
           <BigStat label="Distance" value={`${Math.round(raw.distance)}m`} />
           <BigStat label="Coins" value={`◉ ${raw.coinsCollected}`} accent />
-          <BigStat label="Cleared" value={`${raw.obstaclesCleared}/${raw.obstaclesTotal}`} />
+          <BigStat label="Cleared" value={`${raw.obstaclesCleared}`} />
         </div>
 
         <div className="mt-4 text-lg">

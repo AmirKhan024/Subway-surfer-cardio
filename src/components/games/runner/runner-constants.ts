@@ -148,10 +148,16 @@ export const JUICE = {
 
 // ── Course / world ───────────────────────────────────────────────────────
 export const COURSE = {
+  /** obstacles per generated CHUNK (endless: chunks append as you run) */
   OBSTACLES: 20,
   /** run speed ramp, m/s */
   SPEED_START: 6,
   SPEED_END: 9,
+  /** speed ramps from START to END over this fixed distance (endless-safe;
+   *  ≈ the old 20-obstacle course length, preserving the original feel) */
+  RAMP_DISTANCE_M: 300,
+  /** append the next chunk when the player is this close to generated end */
+  SPAWN_AHEAD_M: 120,
   /** distance before the first obstacle, m */
   LEAD_IN_M: 30,
   /** movement-paced spacing: minimum seconds between obstacles */

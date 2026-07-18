@@ -13,8 +13,8 @@ import { COLORS } from './runner-constants';
 export interface HudState {
   distance: number;
   lives: number;
+  /** obstacles cleared — raw count, no denominator (endless mode) */
   cleared: number;
-  total: number;
   cue: CueState | null;
   lowImpact: boolean;
   /** head/neck control: cues read LOOK UP / LOOK DOWN */
@@ -114,9 +114,7 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
           <span className="text-rose-400">{'♥'.repeat(Math.max(0, hud.lives))}</span>
           <span className="text-slate-500">{'♥'.repeat(Math.max(0, 3 - hud.lives))}</span>
         </Chip>
-        <Chip>
-          {hud.cleared}/{hud.total}
-        </Chip>
+        <Chip>✓ {hud.cleared}</Chip>
         <Chip>
           <span className="text-amber-400">◉ {hud.coins}</span>
         </Chip>

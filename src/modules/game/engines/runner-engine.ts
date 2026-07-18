@@ -31,9 +31,8 @@ import type {
 } from './types';
 import { LM } from './types';
 import {
-  generateCourse,
-  generateCoins,
-  courseLength,
+  generateChunk,
+  coinsForChunk,
   type Obstacle,
   type Coin,
 } from './runner-timeline';
@@ -148,7 +147,9 @@ export class RunnerEngine implements GameEngine {
   /** wall-ts when the world froze; 0 = live. Used to shift pending grace. */
   private frozenAt = 0;
   /** why the run ended; null while running. Drives the game-over/report copy. */
-  private endReason: 'time' | 'lives' | 'course' | null = null;
+  private endReason: 'time' | 'lives' | null = null;
+  /** next chunk index for the endless obstacle stream */
+  private chunkIndex = 0;
 
   // ── calibration ──
   private calHoldStart = 0; // 0 = not holding
@@ -335,10 +336,12 @@ export class RunnerEngine implements GameEngine {
     this.neckEarDeltaNow = 0;
     this.earNeutral = 0;
 
-    this.obstacles = generateCourse(this.seed);
+    // endless: chunk 0 now, more appended as the player approaches the end
+    this.obstacles = generateChunk(this.seed, 0, COURSE.LEAD_IN_M, 0);
+    this.chunkIndex = 1;
     this.resolved = this.obstacles.map(() => false);
     this.clearedFlags = this.obstacles.map(() => false);
-    this.coins = generateCoins(this.seed, this.obstacles);
+    this.coins = coinsForChunk(this.seed, 0, this.obstacles, 0);
     this.coinDone = this.coins.map(() => false);
     this.coinCollected = this.coins.map(() => false);
     this.coinsCollected = 0;
@@ -693,9 +696,9 @@ export class RunnerEngine implements GameEngine {
     this.speedFactor = Math.min(1, this.speedFactor + LOCO.ACCEL_PER_S * dt);
     this.gameTimeMs += dt * 1000;
 
-    // 2. world advance
-    const len = courseLength(this.obstacles);
-    const speedT = clamp01(this.distance / len);
+    // 2. world advance (endless: spawn the next chunk before we get there)
+    this.appendChunksIfNeeded();
+    const speedT = clamp01(this.distance / COURSE.RAMP_DISTANCE_M);
     this.speed = COURSE.SPEED_START + (COURSE.SPEED_END - COURSE.SPEED_START) * speedT;
     const prevDistance = this.distance;
     this.distance += this.speed * this.speedFactor * dt;
@@ -731,13 +734,12 @@ export class RunnerEngine implements GameEngine {
     // 4. cue for the nearest unresolved obstacle
     this.updateCue(timestampMs);
 
-    // 5. finish conditions (session timer caps the fixed course — scoring
-    // bands stay calibrated on the 20-obstacle course)
+    // 5. finish conditions (endless: only the timer or the lives end a run)
     const timeUp = this.sessionMs > 0 && this.gameTimeMs >= this.sessionMs;
-    if (this.lives <= 0 || this.resolved.every(Boolean) || timeUp) {
+    if (this.lives <= 0 || timeUp) {
       this.phase = 'done';
       this.finalizePendingReps();
-      this.endReason = timeUp ? 'time' : this.lives <= 0 ? 'lives' : 'course';
+      this.endReason = timeUp ? 'time' : 'lives';
       this.emit('RUN_DONE', {
         lives: this.lives,
         resolved: this.resolved.filter(Boolean).length,
@@ -1499,19 +1501,30 @@ export class RunnerEngine implements GameEngine {
       lives: this.lives,
       hitFlashAt: this.hitFlashAt,
       cue: this.cue,
-      obstacles: this.obstacles.map((ob, i) => ({
-        id: ob.id,
-        type: ob.type,
-        zAhead: ob.atDistance - this.distance,
-        resolved: this.resolved[i],
-        cleared: this.clearedFlags[i],
-      })),
-      coins: this.coins.map((c, i) => ({
-        id: c.id,
-        zAhead: c.atDistance - this.distance,
-        aerial: c.aerial,
-        collected: this.coinCollected[i],
-      })),
+      // WINDOWED for endless mode: per-frame mapping must not grow with the
+      // run. The band [-15, 130] fully covers the scene's create range
+      // (zAhead -5..95) plus margin on both sides so its dispose branch
+      // always sees an item one last time before it leaves the window.
+      obstacles: this.obstacles.reduce<SceneObstacle[]>((out, ob, i) => {
+        const zAhead = ob.atDistance - this.distance;
+        if (zAhead > -15 && zAhead < 130) {
+          out.push({
+            id: ob.id,
+            type: ob.type,
+            zAhead,
+            resolved: this.resolved[i],
+            cleared: this.clearedFlags[i],
+          });
+        }
+        return out;
+      }, []),
+      coins: this.coins.reduce<SceneCoin[]>((out, c, i) => {
+        const zAhead = c.atDistance - this.distance;
+        if (zAhead > -15 && zAhead < 130) {
+          out.push({ id: c.id, zAhead, aerial: c.aerial, collected: this.coinCollected[i] });
+        }
+        return out;
+      }, []),
       coinsCollected: this.coinsCollected,
       lowImpact: this.lowImpact,
       crouch: this.crouch,
@@ -1541,8 +1554,34 @@ export class RunnerEngine implements GameEngine {
   }
 
   /** Why the run ended (null while running) — never infer this from lives. */
-  getEndReason(): 'time' | 'lives' | 'course' | null {
+  getEndReason(): 'time' | 'lives' | null {
     return this.endReason;
+  }
+
+  /** Endless stream: append chunks so obstacles always exist well ahead. */
+  private appendChunksIfNeeded(): void {
+    while (
+      this.obstacles[this.obstacles.length - 1].atDistance - this.distance <
+      COURSE.SPAWN_AHEAD_M
+    ) {
+      const startAt = this.obstacles[this.obstacles.length - 1].atDistance;
+      const chunk = generateChunk(this.seed, this.chunkIndex, startAt, this.obstacles.length);
+      const chunkCoins = coinsForChunk(this.seed, this.chunkIndex, chunk, this.coins.length);
+      this.chunkIndex += 1;
+      for (const ob of chunk) {
+        this.obstacles.push(ob);
+        this.resolved.push(false);
+        this.clearedFlags.push(false);
+        this.cueShownAt.push(0);
+        this.reactionRecorded.push(false);
+      }
+      for (const c of chunkCoins) {
+        this.coins.push(c);
+        this.coinDone.push(false);
+        this.coinCollected.push(false);
+      }
+      this.emit('CHUNK_SPAWN', { chunk: this.chunkIndex - 1, totalObstacles: this.obstacles.length });
+    }
   }
 
   getRawData(): RunnerRawData {

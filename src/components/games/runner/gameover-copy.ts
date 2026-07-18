@@ -4,7 +4,7 @@
  * of living only inside JSX. Branches on the engine's RUN_DONE reason,
  * NEVER on lives/resolved counts.
  */
-export type EndReason = 'time' | 'lives' | 'course' | null;
+export type EndReason = 'time' | 'lives' | null;
 
 export interface GameOverCopy {
   title: string;
@@ -20,12 +20,6 @@ export function gameOverCopy(reason: EndReason): GameOverCopy {
         title: 'Out of lives',
         sub: "Nice run — you'll get further next time.",
         tone: 'lose',
-      };
-    case 'course':
-      return {
-        title: 'Run Complete!',
-        sub: 'You cleared the course — great moving!',
-        tone: 'win',
       };
     case 'time':
     default:

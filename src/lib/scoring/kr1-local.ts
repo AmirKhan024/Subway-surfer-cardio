@@ -33,7 +33,7 @@ export interface KR1ScoreResult {
 // NOTE: bands follow PROD convention (0 = best .. 4 = worst). The SPEC's
 // draft bandKR1X returned 4 for best — inverted vs the audited matrices
 // where MATRIX[0][0] = 1.000 is the maximum. Prod wins.
-// X (primary, 70%): obstacles cleared out of the fixed 20-obstacle course.
+// X (primary, 70%): thresholds calibrated on the original 20-obstacle scale.
 export function bandKR1X(cleared: number): number {
   if (cleared >= 18) return 0;
   if (cleared >= 15) return 1;
@@ -63,6 +63,31 @@ export function isIncompleteRun(raw: Pick<RunnerRawData, 'squatReps' | 'jumpReps
   return raw.squatReps + raw.jumpReps === 0 && raw.obstaclesCleared === 0;
 }
 
+/**
+ * ENDLESS-mode X input — duration-independent by construction:
+ *
+ *   effectiveCleared = (cleared / attempted) × 20
+ *
+ * With endless obstacles the raw cleared-count scales with the chosen
+ * session length (30/60/90s), which would make the SAME user's Muscle Age
+ * depend on the duration they picked. The clear-FRACTION of obstacles
+ * actually attempted does not: the denominator scales with whatever the
+ * world served, so a given accuracy maps to the same X band regardless of
+ * duration. ×20 projects the fraction onto the scale the (unchanged)
+ * bandKR1X thresholds (≥18/15/11/7) were calibrated for. A time-rate was
+ * rejected: obstacle arrival rate depends on the speed ramp, which would
+ * penalize short sessions. Deliberate metric choice (owner-approved):
+ * accuracy over volume. Small samples are flagged by assessmentValid.
+ * The user always SEES the honest raw count — only scoring gets this.
+ */
+export function effectiveCleared(
+  raw: Pick<RunnerRawData, 'obstaclesCleared' | 'obstaclesFailed'>,
+): number {
+  const attempted = raw.obstaclesCleared + raw.obstaclesFailed;
+  if (attempted <= 0) return 0;
+  return (raw.obstaclesCleared / attempted) * 20;
+}
+
 export function computeKR1Score(raw: RunnerRawData, age: number): KR1ScoreResult {
   if (isIncompleteRun(raw)) {
     return {
@@ -77,7 +102,7 @@ export function computeKR1Score(raw: RunnerRawData, age: number): KR1ScoreResult
     };
   }
 
-  const xBandIdx = bandKR1X(raw.obstaclesCleared);
+  const xBandIdx = bandKR1X(effectiveCleared(raw));
   const yBandIdx = bandKR1Y(raw.cleanFormRate);
   // prod lookup convention: matrix[yBandIdx][xBandIdx] — X is the 70% axis
   // (columns spread 0.28/row; rows spread 0.12/col)

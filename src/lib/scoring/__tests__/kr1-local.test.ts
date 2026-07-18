@@ -8,6 +8,7 @@ import {
   bandKR1X,
   bandKR1Y,
   computeKR1Score,
+  effectiveCleared,
   isIncompleteRun,
 } from '../kr1-local';
 import { MATRIX_70_30, getAgeNormFactor, getPreCondBandIdx, getAgeCohortIdx } from '../kr1-matrices';
@@ -105,35 +106,79 @@ describe('band edges (inclusive sides pinned)', () => {
 
 describe('swap detection', () => {
   it('strong clears + mediocre form → matrix[3][0]=0.910, NOT transposed 0.790', () => {
-    const r = computeKR1Score(makeRaw({ obstaclesCleared: 20, cleanFormRate: 0.45 }), 45);
+    const r = computeKR1Score(
+      makeRaw({ obstaclesCleared: 20, obstaclesFailed: 0, cleanFormRate: 0.45 }),
+      45,
+    );
     expect(r.xBandIdx).toBe(0);
     expect(r.yBandIdx).toBe(3);
     expect(r.preCond).toBe(0.91); // matrix[3][0] — clears are primary
   });
 });
 
+// ── ENDLESS-mode X input: fraction of attempted, duration-independent ──────
+
+describe('effectiveCleared — the duration-normalized X input', () => {
+  it('is clear-fraction × 20 (accuracy over volume — owner-approved)', () => {
+    expect(effectiveCleared({ obstaclesCleared: 20, obstaclesFailed: 0 })).toBe(20);
+    expect(effectiveCleared({ obstaclesCleared: 10, obstaclesFailed: 10 })).toBe(10);
+    expect(effectiveCleared({ obstaclesCleared: 13, obstaclesFailed: 3 })).toBeCloseTo(16.25, 10);
+    expect(effectiveCleared({ obstaclesCleared: 0, obstaclesFailed: 0 })).toBe(0);
+    expect(effectiveCleared({ obstaclesCleared: 0, obstaclesFailed: 3 })).toBe(0);
+  });
+
+  it('the SAME accuracy maps to the SAME band regardless of session volume', () => {
+    // 90% accuracy at 30s-ish volume vs 90s-ish volume → identical band
+    const short = effectiveCleared({ obstaclesCleared: 9, obstaclesFailed: 1 });
+    const long = effectiveCleared({ obstaclesCleared: 36, obstaclesFailed: 4 });
+    expect(bandKR1X(short)).toBe(bandKR1X(long));
+    expect(short).toBeCloseTo(long, 10);
+  });
+
+  it('higher clear-fraction never maps to a worse band', () => {
+    let prevBand = 4;
+    for (let cleared = 0; cleared <= 20; cleared++) {
+      const band = bandKR1X(effectiveCleared({ obstaclesCleared: cleared, obstaclesFailed: 20 - cleared }));
+      expect(band).toBeLessThanOrEqual(prevBand);
+      prevBand = band;
+    }
+  });
+});
+
 // ── golden vectors (hand-computed against clone values) ────────────────────
 
 describe('golden vectors', () => {
+  // RE-DERIVED for the endless fraction-of-attempted X input (owner-approved):
+  // X = (cleared/attempted)×20 → bandKR1X (thresholds + matrix + age-norm all
+  // byte-identical). Perfect (A/B/E, failed 0) and zero (F) anchors unchanged.
+  // C: 13 cleared / 3 failed (lives-ended) → effective 16.25 → xBand 1 →
+  //    matrix[2][1] = 0.87, cohort 50-59 factor band ≥.75 → 1.05 →
+  //    conditioned 0.9135 → musculage round(52/0.9135) = 57 (was 62).
+  // D: "poor" now = poor ACCURACY: 1 cleared / 3 failed → effective 5 →
+  //    xBand 4 → matrix[4][4] = 0.60, factor 0.85 → musculage 49 (unchanged).
   const vectors: Array<{
     name: string;
     cleared: number;
+    failed: number;
     cfr: number;
     age: number;
     preCond: number;
     ageFactor: number;
     musculage: number;
   }> = [
-    { name: 'A perfect/young', cleared: 20, cfr: 0.95, age: 30, preCond: 1.0, ageFactor: 1.0, musculage: 30 },
-    { name: 'B perfect/older', cleared: 20, cfr: 0.95, age: 65, preCond: 1.0, ageFactor: 1.15, musculage: 57 },
-    { name: 'C mid/mid-age', cleared: 13, cfr: 0.62, age: 52, preCond: 0.8, ageFactor: 1.05, musculage: 62 },
-    { name: 'D poor/young', cleared: 6, cfr: 0.3, age: 25, preCond: 0.6, ageFactor: 0.85, musculage: 49 },
-    { name: 'E clears/weak form', cleared: 20, cfr: 0.45, age: 45, preCond: 0.91, ageFactor: 1.05, musculage: 47 },
+    { name: 'A perfect/young', cleared: 20, failed: 0, cfr: 0.95, age: 30, preCond: 1.0, ageFactor: 1.0, musculage: 30 },
+    { name: 'B perfect/older', cleared: 20, failed: 0, cfr: 0.95, age: 65, preCond: 1.0, ageFactor: 1.15, musculage: 57 },
+    { name: 'C mid/mid-age', cleared: 13, failed: 3, cfr: 0.62, age: 52, preCond: 0.87, ageFactor: 1.05, musculage: 57 },
+    { name: 'D poor/young', cleared: 1, failed: 3, cfr: 0.3, age: 25, preCond: 0.6, ageFactor: 0.85, musculage: 49 },
+    { name: 'E clears/weak form', cleared: 20, failed: 0, cfr: 0.45, age: 45, preCond: 0.91, ageFactor: 1.05, musculage: 47 },
   ];
 
   for (const v of vectors) {
-    it(`${v.name}: (${v.cleared}, ${v.cfr}, age ${v.age}) → musculage ${v.musculage}`, () => {
-      const r = computeKR1Score(makeRaw({ obstaclesCleared: v.cleared, cleanFormRate: v.cfr }), v.age);
+    it(`${v.name}: (${v.cleared}/${v.cleared + v.failed}, ${v.cfr}, age ${v.age}) → musculage ${v.musculage}`, () => {
+      const r = computeKR1Score(
+        makeRaw({ obstaclesCleared: v.cleared, obstaclesFailed: v.failed, cleanFormRate: v.cfr }),
+        v.age,
+      );
       expect(r.preCond).toBeCloseTo(v.preCond, 10);
       expect(r.ageFactor).toBeCloseTo(v.ageFactor, 10);
       expect(r.conditioned).toBeCloseTo(v.preCond * v.ageFactor, 10);
@@ -162,8 +207,14 @@ describe('golden vectors', () => {
   });
 
   it('A vs B: identical perfect run gives the OLDER user a musculage below their age', () => {
-    const young = computeKR1Score(makeRaw({ obstaclesCleared: 20, cleanFormRate: 0.95 }), 30);
-    const older = computeKR1Score(makeRaw({ obstaclesCleared: 20, cleanFormRate: 0.95 }), 65);
+    const young = computeKR1Score(
+      makeRaw({ obstaclesCleared: 20, obstaclesFailed: 0, cleanFormRate: 0.95 }),
+      30,
+    );
+    const older = computeKR1Score(
+      makeRaw({ obstaclesCleared: 20, obstaclesFailed: 0, cleanFormRate: 0.95 }),
+      65,
+    );
     expect(older.musculage).toBeLessThan(65); // 57 — impressive-for-age credit
     expect(older.conditioned).toBeGreaterThan(1.0); // legal — display caps at 100%
     expect(young.musculage).toBe(30);
@@ -174,7 +225,11 @@ describe('golden vectors', () => {
 
 describe('inclusive-comparator boundary', () => {
   it('preCond exactly 0.900 (x1,y1) at age 35 → R0 factor 1.00 → musculage 39, not 43', () => {
-    const r = computeKR1Score(makeRaw({ obstaclesCleared: 15, cleanFormRate: 0.8 }), 35);
+    // effective = 15/20 × 20 = 15 → xBand 1 (same cell as the old input)
+    const r = computeKR1Score(
+      makeRaw({ obstaclesCleared: 15, obstaclesFailed: 5, cleanFormRate: 0.8 }),
+      35,
+    );
     expect(r.preCond).toBeCloseTo(0.9, 10);
     expect(r.ageFactor).toBe(1.0); // inclusive >= 0.90 → top band
     expect(r.musculage).toBe(39); // round(35/0.900) — exclusive would give 43
@@ -264,8 +319,9 @@ describe('KR1N head-mode scoring', () => {
  * telemetry after launch; if real runs cluster ≥18, widen the X bands
  * (≥20→0, ≥18→1, ≥15→2, ≥12→3, else 4).
  */
-function skillRun(p: number, seed: number): number {
+function skillRun(p: number, seed: number, sessionMs = 60_000): RunnerRawData {
   const engine = new RunnerEngine({ controlMode: 'keyboard', seed });
+  engine.setSessionMs(sessionMs); // endless mode: session bounds the run
   engine.startPlaying();
   // deterministic per-obstacle "skill roll" via the obstacle id
   const respond = (id: number) => ((id * 2654435761 + Math.floor(p * 1e6)) % 1000) / 1000 < p;
@@ -288,7 +344,7 @@ function skillRun(p: number, seed: number): number {
     }
     engine.processFrame([], t);
   }
-  return engine.getRawData().obstaclesCleared;
+  return engine.getRawData();
 }
 
 describe('xBand distribution across a skill sweep', () => {
@@ -298,8 +354,8 @@ describe('xBand distribution across a skill sweep', () => {
     let runs = 0;
     for (const p of skills) {
       for (const seed of [1337, 2861]) {
-        const cleared = skillRun(p, seed);
-        histogram[bandKR1X(cleared)]++;
+        const raw = skillRun(p, seed);
+        histogram[bandKR1X(effectiveCleared(raw))]++;
         runs++;
       }
     }
@@ -308,5 +364,37 @@ describe('xBand distribution across a skill sweep', () => {
     const bandsHit = histogram.filter((n) => n > 0).length;
     expect(bandsHit).toBeGreaterThanOrEqual(4);
     expect(histogram[0] / runs).toBeLessThan(0.7);
+  });
+});
+
+// ── endless duration-independence (the critical Muscle-Age protection) ─────
+
+describe('endless mode: Muscle Age is duration-independent', () => {
+  it('perfect play at 30s vs 90s → same X band, same musculage', () => {
+    const short = skillRun(1.0, 1337, 30_000);
+    const long = skillRun(1.0, 1337, 90_000);
+    // raw counts differ (more obstacles served in 90s)…
+    expect(long.obstaclesCleared).toBeGreaterThan(short.obstaclesCleared);
+    // …but the scoring input and result do not
+    const rShort = computeKR1Score(short, 40);
+    const rLong = computeKR1Score(long, 40);
+    expect(rShort.xBandIdx).toBe(rLong.xBandIdx);
+    expect(rShort.xBandIdx).toBe(0);
+    expect(rShort.musculage).toBe(rLong.musculage);
+  });
+
+  it('high-but-imperfect play at 30s vs 90s → same X band', () => {
+    const short = skillRun(0.95, 1337, 30_000);
+    const long = skillRun(0.95, 1337, 90_000);
+    const rShort = computeKR1Score(short, 40);
+    const rLong = computeKR1Score(long, 40);
+    expect(rShort.xBandIdx).toBe(rLong.xBandIdx);
+  });
+
+  it('a higher clear-rate maps to a better (or equal) band than a lower one', () => {
+    const weak = computeKR1Score(skillRun(0.5, 1337), 40);
+    const strong = computeKR1Score(skillRun(0.95, 1337), 40);
+    expect(strong.xBandIdx).toBeLessThanOrEqual(weak.xBandIdx);
+    expect(strong.musculage).toBeLessThanOrEqual(weak.musculage);
   });
 });

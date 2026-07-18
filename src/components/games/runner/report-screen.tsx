@@ -227,7 +227,7 @@ export default function ReportScreen({
         )}
 
         <p className="mt-4 text-center text-sm text-slate-400">
-          {raw.obstaclesCleared}/{raw.obstaclesTotal} obstacles · {Math.round(raw.distance)}m
+          {raw.obstaclesCleared} obstacles cleared · {Math.round(raw.distance)}m
         </p>
 
         <div className="mt-4 grid grid-cols-3 gap-2">

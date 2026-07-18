@@ -12,7 +12,6 @@ describe('gameOverCopy — driven by RUN_DONE reason, never by lives', () => {
   it("'lives' is the ONLY reason that reads as a loss", () => {
     expect(gameOverCopy('lives').title).toBe('Out of lives');
     expect(gameOverCopy('lives').tone).toBe('lose');
-    expect(gameOverCopy('course').tone).toBe('win');
     expect(gameOverCopy(null).tone).toBe('win'); // safe default
   });
 
