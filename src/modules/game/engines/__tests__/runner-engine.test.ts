@@ -1399,6 +1399,102 @@ describe('RunnerEngine — locomotion gating (march/jog to move)', () => {
   });
 });
 
+// ── B2: startup smoothness — fast re-arm + gap grace + LOCO_DIAG ──────────
+describe('RunnerEngine — startup smoothness (re-arm hysteresis + gap grace)', () => {
+  function gatedEngine(): { engine: RunnerEngine; t: number } {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    const t = calibrate(engine);
+    engine.setLocomotionGating(true);
+    engine.startPlaying();
+    return { engine, t };
+  }
+
+  function driveBounce(engine: RunnerEngine, t: number, frames: number): number {
+    for (let i = 0; i < frames; i++) {
+      t += FRAME_MS;
+      const hipY = 0.6 + 0.012 * Math.sin((2 * Math.PI * i) / 12); // ~2.5Hz
+      engine.processFrame(makeFrame({ hipY }), t);
+    }
+    return t;
+  }
+
+  function driveStill(engine: RunnerEngine, t: number, frames: number): number {
+    for (let i = 0; i < frames; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6 }), t);
+    }
+    return t;
+  }
+
+  it('after a mid-run stall, locomotion re-arms on a short cadence (not the full debounce)', () => {
+    const { engine, t: t0 } = gatedEngine();
+    let t = driveBounce(engine, t0, 90); // established run
+    t = driveStill(engine, t, 60); // ~2s stall → full collapse
+    expect(engine.getLocomotionState().active).toBe(false);
+    expect(engine.getLocomotionState().started).toBe(false);
+
+    t = driveBounce(engine, t, 20); // ~2 crossings — NOT enough for a cold start
+    expect(engine.getLocomotionState().started).toBe(true); // fast re-arm
+
+    // control: a COLD engine given the same short cadence must not start
+    const cold = gatedEngine();
+    driveBounce(cold.engine, cold.t, 20);
+    expect(cold.engine.getLocomotionState().started).toBe(false);
+  });
+
+  it('a locomotion drop holds world speed flat for the gap grace before decaying', () => {
+    const { engine, t: t0 } = gatedEngine();
+    let t = driveBounce(engine, t0, 90);
+    expect(engine.getLocomotionState().active).toBe(true);
+    engine.drainEvents(); // drop the run-start freeze/resume backlog
+
+    // stop: the freeze fires after the step timeout; from the freeze the
+    // world must coast at FULL speed for GAP_GRACE_MS before decaying
+    let frozen = false;
+    let i = 0;
+    while (!frozen && i < 90) {
+      t += FRAME_MS;
+      i++;
+      engine.processFrame(makeFrame({ hipY: 0.6 }), t);
+      if (engine.drainEvents().some((e) => e.tag === 'RUN_FREEZE')) frozen = true;
+    }
+    expect(frozen).toBe(true);
+    const speed = engine.getSceneState().speed;
+    const dAtFreeze = engine.getSceneState().distance;
+    t = driveStill(engine, t, 12); // ~0.40s — inside the 450ms grace
+    const graceDelta = engine.getSceneState().distance - dAtFreeze;
+    expect(graceDelta).toBeGreaterThan(speed * 0.35); // no visible slowdown
+    const dAfterGrace = engine.getSceneState().distance;
+    t = driveStill(engine, t, 12); // same span, past the grace → decaying
+    const decayDelta = engine.getSceneState().distance - dAfterGrace;
+    expect(decayDelta).toBeLessThan(graceDelta * 0.85);
+  });
+
+  it('LOCO_DIAG traces fire only under setDebug(true)', () => {
+    const { engine, t: t0 } = gatedEngine();
+    engine.setDebug(true);
+    let t = t0;
+    const tags: string[] = [];
+    for (let i = 0; i < 30; i++) {
+      t += FRAME_MS;
+      const hipY = 0.6 + 0.012 * Math.sin((2 * Math.PI * i) / 12);
+      engine.processFrame(makeFrame({ hipY }), t);
+      for (const e of engine.drainEvents()) tags.push(e.tag);
+    }
+    expect(tags.filter((x) => x === 'LOCO_DIAG').length).toBeGreaterThanOrEqual(3);
+
+    const quiet = gatedEngine(); // debug off by default
+    let tq = quiet.t;
+    const quietTags: string[] = [];
+    for (let i = 0; i < 30; i++) {
+      tq += FRAME_MS;
+      quiet.engine.processFrame(makeFrame({ hipY: 0.6 }), tq);
+      for (const e of quiet.engine.drainEvents()) quietTags.push(e.tag);
+    }
+    expect(quietTags.includes('LOCO_DIAG')).toBe(false);
+  });
+});
+
 // ── B1: resume-near-obstacle fairness ──────────────────────────────────────
 // A locomotion stop coasts to a reaction-based margin before the plane, and
 // after ANY gated resume the plane cannot be crossed until the player has had

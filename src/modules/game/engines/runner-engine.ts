@@ -224,6 +224,11 @@ export class RunnerEngine implements GameEngine {
   private lastStepTs = 0;
   /** debounced start achieved (requires rhythmic cadence, not one twitch) */
   private locoStarted = false;
+  /** locomotion has started at least once this run — re-starts then need
+   *  only REARM_CROSSINGS (kills the arm→collapse→full-debounce lurch) */
+  private locoEverStarted = false;
+  /** last LOCO_DIAG emission ts (debug-only instrumentation throttle) */
+  private lastLocoDiagTs = 0;
   /** step phase for the game-feel head-bob (advances π per crossing) */
   private stepPhase = 0;
   /** per-knee baselines + last lifted leg for the knee-lift confirmation */
@@ -325,6 +330,8 @@ export class RunnerEngine implements GameEngine {
     this.locoCrossTimes = [];
     this.lastStepTs = 0;
     this.locoStarted = false;
+    this.locoEverStarted = false;
+    this.lastLocoDiagTs = 0;
     this.stepPhase = 0;
     this.kneeBaseReady = false;
     this.kneeLiftedL = false;
@@ -678,7 +685,11 @@ export class RunnerEngine implements GameEngine {
       // broken), clamped so the coast can NEVER cross an unresolved obstacle
       // plane. Manual pause freezes instantly — that's user intent.
       if (!this.manuallyPaused && this.locomotionGating && this.speedFactor > 0) {
-        this.speedFactor = Math.max(0, this.speedFactor - LOCO.DECEL_PER_S * dt);
+        // gap grace: a brief detection hiccup must not visibly slow the
+        // world — hold speed flat, then decay (clamp below still protects)
+        if (timestampMs - this.frozenAt >= LOCO.GAP_GRACE_MS) {
+          this.speedFactor = Math.max(0, this.speedFactor - LOCO.DECEL_PER_S * dt);
+        }
         let step = this.speed * this.speedFactor * dt;
         // reaction-based margin: halt far enough back that the resume ramp
         // still leaves visible cue runway before the plane
@@ -1116,10 +1127,15 @@ export class RunnerEngine implements GameEngine {
     this.lastStepTs = now;
     this.stepPhase += Math.PI;
     if (!this.locoStarted) {
+      // first start keeps the full anti-twitch debounce; once locomotion has
+      // been established this run, recovery after a brief stall is fast —
+      // demanding 4 fresh crossings mid-run reads as "pushed backward"
+      const needed = this.locoEverStarted ? LOCO.REARM_CROSSINGS : LOCO.START_CROSSINGS;
       const inWindow = this.locoCrossTimes.filter((t) => now - t <= LOCO.START_WINDOW_MS);
-      if (inWindow.length >= LOCO.START_CROSSINGS) {
+      if (inWindow.length >= needed) {
         this.locoStarted = true;
-        this.emit('LOCO_START', {});
+        this.locoEverStarted = true;
+        this.emit('LOCO_START', { needed });
       }
     }
   }
@@ -1144,6 +1160,19 @@ export class RunnerEngine implements GameEngine {
     }
     if (wasActive !== this.locomotionActive) {
       this.emit(this.locomotionActive ? 'LOCO_ON' : 'LOCO_OFF', {
+        msSinceStep: this.lastStepTs > 0 ? Math.round(now - this.lastStepTs) : -1,
+        speedFactor: Math.round(this.speedFactor * 100) / 100,
+      });
+    }
+    // debug-only startup/lurch instrumentation (?debug=1): throttled trace of
+    // the locomotion state machine — zero prod-path cost beyond one boolean
+    if (this.debug && now - this.lastLocoDiagTs >= 250) {
+      this.lastLocoDiagTs = now;
+      this.emit('LOCO_DIAG', {
+        sf: Math.round(this.speedFactor * 100) / 100,
+        started: this.locoStarted,
+        active: this.locomotionActive,
+        crossings: this.locoCrossTimes.length,
         msSinceStep: this.lastStepTs > 0 ? Math.round(now - this.lastStepTs) : -1,
       });
     }
