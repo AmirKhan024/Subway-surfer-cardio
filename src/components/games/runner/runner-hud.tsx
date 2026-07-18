@@ -32,7 +32,7 @@ function fmtTimer(ms: number): string {
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/15 bg-slate-950/60 px-3 py-1.5 text-sm font-semibold text-slate-50 backdrop-blur-md shadow-glass-sm">
+    <div className="rounded-xl border border-white/15 bg-slate-950/60 px-2 py-1 text-xs font-semibold text-slate-50 backdrop-blur-md shadow-glass-sm sm:px-3 sm:py-1.5 sm:text-sm">
       {children}
     </div>
   );
@@ -93,17 +93,22 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
       {/* session timer — active-movement time only (pauses/rests don't tick) */}
       {hud.timerMs !== null && (
         <div
-          className={`absolute left-1/2 top-3 -translate-x-1/2 rounded-xl border bg-slate-950/60 px-4 py-1.5 font-heading text-xl font-bold tabular-nums backdrop-blur-md ${
+          className={`absolute left-1/2 -translate-x-1/2 rounded-xl border bg-slate-950/60 px-4 py-1.5 font-heading text-lg font-bold tabular-nums backdrop-blur-md sm:text-xl ${
             timerLow
               ? 'border-amber-500/50 text-amber-300 motion-safe:animate-pulse'
               : 'border-white/15 text-slate-50'
           }`}
+          style={{ top: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
         >
           {fmtTimer(hud.timerMs)}
         </div>
       )}
-      {/* top-left chips */}
-      <div className="absolute left-3 top-3 flex gap-2">
+      {/* top-left chips — wrap into a narrow stack on phones so they never
+          collide with the centered timer or the pause chip */}
+      <div
+        className="absolute left-3 flex max-w-[38vw] flex-wrap gap-1.5 sm:max-w-none sm:gap-2"
+        style={{ top: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
+      >
         <Chip>Dist {Math.floor(hud.distance)}m</Chip>
         <Chip>
           <span className="text-rose-400">{'♥'.repeat(Math.max(0, hud.lives))}</span>
@@ -124,8 +129,11 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
         </div>
       )}
 
-      {/* persistent disclaimer */}
-      <div className="absolute bottom-2 left-1/2 w-max max-w-[92vw] -translate-x-1/2 rounded-lg border border-amber-500/30 bg-slate-950/70 px-3 py-1 text-center text-[11px] text-amber-200/90 backdrop-blur-md">
+      {/* persistent disclaimer (safe-area aware) */}
+      <div
+        className="absolute left-1/2 w-max max-w-[92vw] -translate-x-1/2 rounded-lg border border-amber-500/30 bg-slate-950/70 px-3 py-1 text-center text-[11px] text-amber-200/90 backdrop-blur-md"
+        style={{ bottom: 'calc(0.5rem + env(safe-area-inset-bottom, 0px))' }}
+      >
         ⚠️ Avoid if you have active pain. Consult a physician first.
       </div>
     </div>

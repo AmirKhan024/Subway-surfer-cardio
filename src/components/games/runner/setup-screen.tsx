@@ -75,7 +75,7 @@ export default function SetupScreen({
   };
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center p-4">
+    <main className="relative flex min-h-[100dvh] items-center justify-center p-4 py-8">
       <BackButton onClick={onBack} />
       <MuteButton />
       <div className="w-full max-w-md rounded-glass border border-white/10 bg-surface p-7 shadow-glass">

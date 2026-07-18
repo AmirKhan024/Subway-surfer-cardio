@@ -51,8 +51,10 @@ function pushHistory(rec: RunRecord): RunRecord[] {
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-slate-900/60 p-3 text-center">
-      <div className="text-lg font-bold text-slate-50">{value}</div>
+    <div className="min-w-0 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-center sm:p-3">
+      <div className="text-[clamp(0.95rem,4.5vw,1.125rem)] font-bold tabular-nums text-slate-50">
+        {value}
+      </div>
       <div className="text-[11px] uppercase tracking-wide text-slate-400">{label}</div>
       {sub && <div className="mt-0.5 text-[10px] text-slate-500">{sub}</div>}
     </div>
@@ -168,7 +170,7 @@ export default function ReportScreen({
   const ringFraction = Math.min(1, age / score.musculage);
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center p-4">
+    <main className="relative flex min-h-[100dvh] items-center justify-center p-4">
       <BackButton onClick={onHome} />
       <MuteButton />
       <div className="w-full max-w-md rounded-glass border border-white/10 bg-surface p-7 shadow-glass">

@@ -14,8 +14,12 @@ import { BackButton, MuteButton } from './screen-chrome';
 
 function BigStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 text-center">
-      <div className={`font-heading text-3xl font-black ${accent ? 'text-amber-400' : 'text-slate-50'}`}>
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-slate-900/60 px-2 py-3 text-center sm:px-4">
+      {/* fluid type + tabular-nums: big values (454m, high coin counts) must
+          never spill outside the tile on narrow phones */}
+      <div
+        className={`font-heading text-[clamp(1.1rem,6.5vw,1.875rem)] font-black tabular-nums ${accent ? 'text-amber-400' : 'text-slate-50'}`}
+      >
         {value}
       </div>
       <div className="mt-0.5 text-[11px] uppercase tracking-wider text-slate-400">{label}</div>
@@ -41,7 +45,7 @@ export default function GameOverScreen({
   const livesLeft = Math.max(0, COURSE.LIVES - raw.obstaclesFailed);
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center p-4">
+    <main className="relative flex min-h-[100dvh] items-center justify-center p-4">
       <BackButton onClick={onHome} />
       <MuteButton />
       <div className="w-full max-w-md rounded-glass border border-white/10 bg-surface p-8 text-center shadow-glass">
@@ -63,7 +67,7 @@ export default function GameOverScreen({
             : "Nice run — you'll get further next time."}
         </p>
 
-        <div className="mt-6 grid grid-cols-3 gap-3">
+        <div className="mt-6 grid grid-cols-3 gap-2 sm:gap-3">
           <BigStat label="Distance" value={`${Math.round(raw.distance)}m`} />
           <BigStat label="Coins" value={`◉ ${raw.coinsCollected}`} accent />
           <BigStat label="Cleared" value={`${raw.obstaclesCleared}/${raw.obstaclesTotal}`} />

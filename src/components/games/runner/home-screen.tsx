@@ -60,7 +60,7 @@ export default function HomeScreen({
   onSelectMode: (mode: PlayMode) => void;
 }) {
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center gap-6 p-4">
+    <main className="relative flex min-h-[100dvh] flex-col items-center justify-center gap-6 p-4">
       <MuteButton />
       <div className="text-center">
         <h1 className="font-heading text-4xl font-bold text-slate-50">Kriya Runner</h1>
