@@ -163,6 +163,17 @@ export const JUICE = {
   /** jogging head-bob: amplitude (m) + fallback cadence (Hz) */
   JOG_BOB_M: 0.02,
   JOG_BOB_HZ: 2.2,
+  /** landing hitstop: world distance pauses this long on a pose landing
+   *  (the single biggest "weight" read — tiny by design, never reads as lag) */
+  HITSTOP_MS: 60,
+  /** landing screen shake: amplitude (m), oscillation Hz, exp decay (per s) —
+   *  X-only and subtle: FPP shake is a nausea risk */
+  SHAKE_M: 0.02,
+  SHAKE_HZ: 12,
+  SHAKE_DECAY: 9,
+  /** jump anticipation: pre-rise crouch-load dip depth (m) + duration (s) */
+  JUMP_DIP_M: 0.03,
+  JUMP_DIP_S: 0.07,
 } as const;
 
 // ── Course / world ───────────────────────────────────────────────────────
@@ -222,6 +233,9 @@ export const CAMERA = {
   DAMP: 18,
   /** downward pitch at full crouch, radians */
   PITCH_CROUCH: -0.12,
+  /** head mode: upward camera tilt at EXT_CLEAN look-up, radians — neck
+   *  mode's own light feedback (it has no physical jump/landing) */
+  HEAD_LOOK_PITCH: 0.1,
   FOV_BASE: 65,
   FOV_SPEED_GAIN: 8,
 } as const;

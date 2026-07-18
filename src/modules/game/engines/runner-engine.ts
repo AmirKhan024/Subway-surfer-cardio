@@ -110,6 +110,8 @@ export interface RunnerSceneState {
   lowImpact: boolean;
   crouch: number;
   jumpY: number;
+  /** decaying landing-shake X offset (m) — scene adds it to camera.position.x */
+  shakeX: number;
 }
 
 type FsmState = 'neutral' | 'active' | 'returning';
@@ -386,6 +388,9 @@ export class RunnerEngine implements GameEngine {
     this.landSpringT = -1;
     this.fovPunch = 0;
     this.jogBobT = 0;
+    this.hitstopUntilMs = 0;
+    this.shakeAmp = 0;
+    this.shakeT = 0;
 
     if (this.controlMode === 'keyboard') {
       // No camera baseline needed — keyboard is instantly "calibrated".
@@ -730,7 +735,11 @@ export class RunnerEngine implements GameEngine {
     const speedT = clamp01(this.distance / COURSE.RAMP_DISTANCE_M);
     this.speed = COURSE.SPEED_START + (COURSE.SPEED_END - COURSE.SPEED_START) * speedT;
     const prevDistance = this.distance;
-    this.distance += this.speed * this.speedFactor * dt;
+    // landing hitstop pauses WORLD DISTANCE only (obstacles/coins/cue derive
+    // from it) — the game clock and camera feel keep running, so the land
+    // spring plays during the stop. Pose-only by construction (set on LAND).
+    const moveDt = timestampMs < this.hitstopUntilMs ? 0 : dt;
+    this.distance += this.speed * this.speedFactor * moveDt;
 
     // 2b. resume grace: hold just short of the nearest unresolved plane
     // until the reaction window elapses — unless the player is already
@@ -1458,6 +1467,14 @@ export class RunnerEngine implements GameEngine {
       if (this.controlMode === 'pose') {
         this.landSpringT = 0;
         this.fovPunch += JUICE.FOV_PUNCH_LAND;
+        if (this.bobScale > 0) {
+          // hitstop + shake: impact weight. The intent window is shifted by
+          // the paused span so the stop can never push a crossing past it.
+          this.hitstopUntilMs = now + JUICE.HITSTOP_MS;
+          this.lastJumpTriggerTs += JUICE.HITSTOP_MS;
+          this.shakeAmp = JUICE.SHAKE_M * this.bobScale;
+          this.shakeT = 0;
+        }
       }
       this.emit('LAND', { mode: this.controlMode });
     }
@@ -1528,6 +1545,11 @@ export class RunnerEngine implements GameEngine {
   private fovPunch = 0;
   /** jogging head-bob oscillator phase */
   private jogBobT = 0;
+  /** landing hitstop: world distance pauses until this ts (pose only) */
+  private hitstopUntilMs = 0;
+  /** landing screen-shake envelope (m) + oscillator clock (s) */
+  private shakeAmp = 0;
+  private shakeT = 0;
 
   private updateCameraFeel(dt: number): void {
     // landing impact: damped spring = quick dip + tiny overshoot-and-settle
@@ -1550,17 +1572,40 @@ export class RunnerEngine implements GameEngine {
       this.jogBobT += dt * 2 * Math.PI * JUICE.JOG_BOB_HZ;
       jogBob = JUICE.JOG_BOB_M * Math.sin(this.jogBobT) * this.speedFactor;
     }
+    // camera rise from the jump arc — with a pose-only anticipation beat:
+    // the first ~70ms loads a small crouch-dip and delays the rise, so the
+    // launch reads as effort instead of a teleport. CAMERA-ONLY shaping —
+    // jumpY() itself is gameplay (aerial coins) and is never bent.
+    let rise = (this.jumpY() / DETECT.JUMP_APEX) * CAMERA.JUMP_RISE_M;
+    if (this.controlMode === 'pose' && this.jumpStartTs !== 0) {
+      const tj = (this.lastTs - this.jumpStartTs) / 1000;
+      if (tj >= 0 && tj < JUICE.JUMP_DIP_S) {
+        rise =
+          rise * (tj / JUICE.JUMP_DIP_S) -
+          JUICE.JUMP_DIP_M * Math.sin((Math.PI * tj) / JUICE.JUMP_DIP_S);
+      }
+    }
     const targetY =
       CAMERA.EYE +
-      this.bobScale *
-        (-CAMERA.CROUCH_DIP * this.crouch +
-          (this.jumpY() / DETECT.JUMP_APEX) * CAMERA.JUMP_RISE_M +
-          landOffset +
-          jogBob);
+      this.bobScale * (-CAMERA.CROUCH_DIP * this.crouch + rise + landOffset + jogBob);
     const a = Math.min(1, dt * CAMERA.DAMP);
     this.cameraY += (targetY - this.cameraY) * a;
-    const targetPitch = CAMERA.PITCH_CROUCH * this.crouch * this.bobScale;
+    let targetPitch = CAMERA.PITCH_CROUCH * this.crouch * this.bobScale;
+    if (this.controlMode === 'head') {
+      // neck mode's own feedback: look-up tilts the camera up (flexion
+      // already dips it via the shared crouch path)
+      targetPitch +=
+        CAMERA.HEAD_LOOK_PITCH *
+        clamp01(Math.max(0, this.neckDeltaNow) / HEAD.EXT_CLEAN) *
+        this.bobScale;
+    }
     this.cameraPitch += (targetPitch - this.cameraPitch) * a;
+    // landing shake envelope (pose only — armed on LAND)
+    if (this.shakeAmp > 0) {
+      this.shakeT += dt;
+      this.shakeAmp -= this.shakeAmp * JUICE.SHAKE_DECAY * dt;
+      if (this.shakeAmp < 5e-4) this.shakeAmp = 0;
+    }
     this.fovPunch = Math.max(0, this.fovPunch - this.fovPunch * JUICE.FOV_PUNCH_DECAY * dt);
     const speedNorm =
       (this.speed - COURSE.SPEED_START) / (COURSE.SPEED_END - COURSE.SPEED_START);
@@ -1615,6 +1660,7 @@ export class RunnerEngine implements GameEngine {
       lowImpact: this.lowImpact,
       crouch: this.crouch,
       jumpY: this.jumpY(),
+      shakeX: this.shakeAmp * Math.sin(this.shakeT * 2 * Math.PI * JUICE.SHAKE_HZ),
     };
   }
 

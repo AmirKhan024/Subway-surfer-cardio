@@ -47,14 +47,21 @@ type UiPhase = 'booting' | 'calibrating' | 'countdown' | 'playing' | 'done';
 
 /** fixed dust-burst particle offsets (deterministic — no per-render random) */
 const DUST_PARTICLES = [
-  { dx: -70, dy: -34, size: 8 },
-  { dx: -42, dy: -58, size: 6 },
-  { dx: -16, dy: -40, size: 9 },
-  { dx: 12, dy: -62, size: 7 },
-  { dx: 38, dy: -44, size: 6 },
-  { dx: 66, dy: -30, size: 9 },
-  { dx: 0, dy: -26, size: 5 },
+  { dx: -90, dy: -40, size: 8 },
+  { dx: -60, dy: -66, size: 6 },
+  { dx: -34, dy: -48, size: 9 },
+  { dx: -12, dy: -72, size: 7 },
+  { dx: 10, dy: -58, size: 8 },
+  { dx: 34, dy: -75, size: 6 },
+  { dx: 58, dy: -50, size: 9 },
+  { dx: 88, dy: -36, size: 7 },
+  { dx: -22, dy: -30, size: 5 },
+  { dx: 24, dy: -28, size: 5 },
 ] as const;
+
+/** head-mode vignette pulse colors (gameplay signal colors) */
+const PULSE_JUMP = 'rgba(6, 182, 212, 0.5)'; // cyan = look-up/jump
+const PULSE_SQUAT = 'rgba(245, 158, 11, 0.5)'; // amber = look-down/squat
 
 export interface RunnerLayerProps {
   controlMode: ControlMode;
@@ -128,9 +135,11 @@ export default function RunnerLayer({
   /** the user has marched at least once this run (onboarding vs stopped hint) */
   const everStartedRef = useRef(false);
   /** screen-space juice timestamps (keyed CSS animations; 0 = never fired) */
-  const [fxLines, setFxLines] = useState(0);
+  const [fxJump, setFxJump] = useState(0);
   const [fxDust, setFxDust] = useState(0);
   const [fxStreak, setFxStreak] = useState(0);
+  /** head-mode edge-vignette pulse: 0 = off, else {t, color} */
+  const [fxPulse, setFxPulse] = useState<{ t: number; color: string } | null>(null);
   const [reducedFx] = useState(
     () =>
       typeof window !== 'undefined' &&
@@ -310,15 +319,25 @@ export default function RunnerLayer({
         const sound = sfxForEvent(e);
         if (sound) audioManager.sfx(sound);
         if (e.tag === 'RUN_DONE') audioManager.duckMusic(2);
-        // screen-space juice — BODY mode only (neck ROM look-ups fire the
-        // same jump arc; mounting fullscreen fx per look-up caused the
-        // head-mode lag) and skipped under prefers-reduced-motion
-        if (!reducedFx && controlMode === 'pose') {
-          if (e.tag === 'JUMP_TRIGGER') setFxLines(now);
-          if (e.tag === 'LAND') setFxDust(now);
-          if (e.tag === 'OBSTACLE' && e.data.type === 'beam' && e.data.cleared === true) {
-            setFxStreak(now);
-            audioManager.sfx('whoosh'); // beam whips overhead
+        // beam whoosh is SOUND, not motion — all modes, even reduced-motion
+        const beamCleared =
+          e.tag === 'OBSTACLE' && e.data.type === 'beam' && e.data.cleared === true;
+        if (beamCleared) audioManager.sfx('whoosh');
+        // landing thud: body mode only (a head-mode LAND is just the end of
+        // a look-up rep — no physical landing)
+        if (e.tag === 'LAND' && e.data.mode === 'pose') audioManager.sfx('land');
+        // screen-space juice — per-mode branches, all partial-screen +
+        // transform/opacity only, skipped under prefers-reduced-motion.
+        // (The old fullscreen conic-gradient caused the head-mode lag; body
+        // mode now uses cheap edge bars, head mode an opacity-only vignette.)
+        if (!reducedFx) {
+          if (controlMode === 'pose') {
+            if (e.tag === 'JUMP_TRIGGER') setFxJump(now);
+            if (e.tag === 'LAND') setFxDust(now);
+            if (beamCleared) setFxStreak(now);
+          } else if (controlMode === 'head') {
+            if (e.tag === 'JUMP_TRIGGER') setFxPulse({ t: now, color: PULSE_JUMP });
+            if (e.tag === 'SQUAT_START') setFxPulse({ t: now, color: PULSE_SQUAT });
           }
         }
       }
@@ -423,18 +442,27 @@ export default function RunnerLayer({
       {/* screen-space juice — keyed so each event restarts its animation;
           UNMOUNTED on animation end (no lingering compositor layers — the
           finished fullscreen-gradient layer was part of the head-mode lag);
-          transform/opacity only + will-change for GPU compositing */}
-      {fxLines > 0 && (
+          transform/opacity only + will-change for GPU compositing.
+          Jump speed-edge: two PARTIAL-SCREEN side bars (the old fullscreen
+          repeating-conic-gradient was the last fullscreen-paint risk). */}
+      {fxJump > 0 && (
         <div
-          key={`l${fxLines}`}
-          onAnimationEnd={() => setFxLines(0)}
-          className="pointer-events-none absolute inset-0 z-20 animate-fx-lines [will-change:opacity,transform]"
-          style={{
-            background:
-              'repeating-conic-gradient(rgba(255,255,255,0.10) 0deg 1.2deg, transparent 1.2deg 9deg)',
-            maskImage: 'radial-gradient(circle at 50% 55%, transparent 38%, black 80%)',
-            WebkitMaskImage: 'radial-gradient(circle at 50% 55%, transparent 38%, black 80%)',
-          }}
+          key={`l${fxJump}`}
+          onAnimationEnd={() => setFxJump(0)}
+          className="pointer-events-none absolute inset-y-0 left-0 right-0 z-20"
+        >
+          <div className="absolute inset-y-0 left-0 w-[12vw] animate-fx-edge bg-gradient-to-r from-white/20 to-transparent [will-change:opacity,transform]" />
+          <div className="absolute inset-y-0 right-0 w-[12vw] animate-fx-edge bg-gradient-to-l from-white/20 to-transparent [will-change:opacity,transform]" />
+        </div>
+      )}
+      {/* head-mode feedback: edge-vignette pulse (static box-shadow, the
+          animation is opacity-only — composites as a single layer) */}
+      {fxPulse && (
+        <div
+          key={`p${fxPulse.t}`}
+          onAnimationEnd={() => setFxPulse(null)}
+          className="pointer-events-none absolute inset-0 z-20 animate-fx-pulse [will-change:opacity]"
+          style={{ boxShadow: `inset 0 0 60px 20px ${fxPulse.color}` }}
         />
       )}
       {fxDust > 0 && (

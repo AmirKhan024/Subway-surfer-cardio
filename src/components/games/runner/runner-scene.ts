@@ -38,6 +38,8 @@ export class RunnerScene {
   /** collect-pop animations: coin id → pop start (ms) */
   private coinPops = new Map<number, number>();
   private hitFlash!: THREE.Mesh;
+  /** ground blob under the player — FPP spatial proof of the jump arc */
+  private playerShadow!: THREE.Mesh;
   private lastFov = 0;
   private disposed = false;
 
@@ -169,6 +171,22 @@ export class RunnerScene {
     this.camera.add(this.hitFlash);
     this.hitFlash.position.set(0, 0, -1.2);
     this.scene.add(this.camera);
+
+    // player ground-shadow blob: shrinks/lightens as jumpY rises, so the
+    // FPP jump reads spatially. One mesh, one draw call — within the
+    // no-shadow-maps budget (this is a flat dark disc, not a shadow map).
+    this.playerShadow = new THREE.Mesh(
+      new THREE.CircleGeometry(0.55, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.28,
+        depthWrite: false,
+      }),
+    );
+    this.playerShadow.rotation.x = -Math.PI / 2;
+    this.playerShadow.position.set(0, 0.03, -1.6);
+    this.scene.add(this.playerShadow);
   }
 
   private addProp(mesh: THREE.Object3D, baseZ: number): void {
@@ -204,7 +222,14 @@ export class RunnerScene {
 
     // camera from engine outputs (never recomputed here)
     this.camera.position.y = state.cameraY;
+    this.camera.position.x = state.shakeX ?? 0;
     this.camera.rotation.x = state.cameraPitch;
+
+    // ground shadow tracks the jump arc + crouch (zero per-frame allocation)
+    const jumpNorm = Math.min(1, state.jumpY / 0.55);
+    this.playerShadow.scale.setScalar(1 - 0.45 * jumpNorm);
+    (this.playerShadow.material as THREE.MeshBasicMaterial).opacity =
+      0.28 * (1 - 0.6 * jumpNorm) * (1 - 0.5 * state.crouch);
     if (Math.abs(state.fov - this.lastFov) > 0.05) {
       this.camera.fov = state.fov;
       this.camera.updateProjectionMatrix();

@@ -22,7 +22,8 @@ export type SfxName =
   | 'gameover'
   | 'countdown'
   | 'go'
-  | 'whoosh';
+  | 'whoosh'
+  | 'land';
 
 const PREF_KEY = 'kr1-audio';
 
@@ -244,6 +245,11 @@ class AudioManager {
         case 'whoosh':
           // beam whipping overhead: fast falling airy sweep, quiet
           this.sweep(1400, 220, 0.22, 'triangle', 0.1);
+          break;
+        case 'land':
+          // landing thud: low body hit + short falling knock
+          this.blip(150, 0.09, 'sine', 0.22);
+          this.sweep(220, 70, 0.12, 'triangle', 0.18);
           break;
       }
     } catch {

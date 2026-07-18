@@ -15,7 +15,15 @@ import {
   mulberry32,
   seedForAttempt,
 } from '../runner-timeline';
-import { COURSE, DETECT, CALIB, COIN, LOCO } from '@/components/games/runner/runner-constants';
+import {
+  COURSE,
+  DETECT,
+  CALIB,
+  COIN,
+  LOCO,
+  JUICE,
+  CAMERA,
+} from '@/components/games/runner/runner-constants';
 import type { NormalizedLandmark } from '../types';
 import { LM } from '../types';
 
@@ -1664,5 +1672,178 @@ describe('RunnerEngine — resume-near-obstacle fairness', () => {
     expect(resume2).toBeDefined();
     expect(obstacle).toBeDefined();
     expect(obstacle!.t - resume2!.t).toBeGreaterThanOrEqual(LOCO.RESUME_REACTION_MS - FRAME_MS);
+  });
+});
+
+// ── B3: landing juice (pose) + head-mode camera feedback ──────────────────
+// Hitstop/shake/anticipation are POSE-ONLY and scaled/gated by bobScale;
+// keyboard and head paths must stay byte-identical (suite-wide guard).
+describe('RunnerEngine — landing juice (hitstop / shake / anticipation dip)', () => {
+  const JUMP_PROFILE = [...ramp(0.6, 0.44, 4), ...Array(6).fill(0.44), ...ramp(0.44, 0.6, 4)];
+
+  /** pose engine, NO locomotion gating (world auto-advances), playing */
+  function poseEngine(): { engine: RunnerEngine; t: number } {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    const t = calibrate(engine);
+    engine.startPlaying();
+    return { engine, t };
+  }
+
+  /** drive a jump then still frames; returns per-frame {t, d, tags} log */
+  function jumpAndCoast(
+    engine: RunnerEngine,
+    t0: number,
+    stillFrames = 30,
+  ): { t: number; d: number; tags: string[] }[] {
+    const frames: { t: number; d: number; tags: string[] }[] = [];
+    let t = t0;
+    const step = (hipY: number) => {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY }), t);
+      frames.push({
+        t,
+        d: engine.getSceneState().distance,
+        tags: engine.drainEvents().map((e) => e.tag),
+      });
+    };
+    for (const hipY of JUMP_PROFILE) step(hipY);
+    for (let i = 0; i < stillFrames; i++) step(0.6);
+    return frames;
+  }
+
+  it('a pose landing hitstops WORLD DISTANCE briefly while the game clock keeps running', () => {
+    const { engine, t } = poseEngine();
+    const frames = jumpAndCoast(engine, t);
+    const landIdx = frames.findIndex((f) => f.tags.includes('LAND'));
+    expect(landIdx).toBeGreaterThan(0);
+    const elapsedAtLand = engine.getRawData().elapsed; // clock reference AFTER run
+    expect(elapsedAtLand).toBeGreaterThan(0);
+    // the frame after LAND falls inside the hitstop → distance frozen
+    const dNext = frames[landIdx + 1].d - frames[landIdx].d;
+    expect(dNext).toBe(0);
+    // ...and the world is moving again within the next two frames
+    const dResume = frames[landIdx + 3].d - frames[landIdx + 1].d;
+    expect(dResume).toBeGreaterThan(0);
+    // clock/elapsed never paused: elapsed spans all frames incl. the hitstop
+    const activeSpan = frames[frames.length - 1].t - frames[0].t + FRAME_MS;
+    expect(engine.getRawData().elapsed).toBeGreaterThanOrEqual(activeSpan - FRAME_MS);
+  });
+
+  it('bobScale=0 (reduced motion) disables the hitstop entirely', () => {
+    const { engine, t } = poseEngine();
+    engine.setBobScale(0);
+    const frames = jumpAndCoast(engine, t);
+    const landIdx = frames.findIndex((f) => f.tags.includes('LAND'));
+    expect(landIdx).toBeGreaterThan(0);
+    for (let i = landIdx + 1; i < Math.min(landIdx + 4, frames.length); i++) {
+      expect(frames[i].d - frames[i - 1].d).toBeGreaterThan(0);
+    }
+  });
+
+  it('keyboard landings never hitstop and never shake (byte-identical guard)', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    engine.setControlInput({ jumpPressed: true });
+    const frames: { d: number; tags: string[]; shakeX: number }[] = [];
+    for (let i = 0; i < 40; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      frames.push({
+        d: engine.getSceneState().distance,
+        tags: engine.drainEvents().map((e) => e.tag),
+        shakeX: engine.getSceneState().shakeX,
+      });
+    }
+    const landIdx = frames.findIndex((f) => f.tags.includes('LAND'));
+    expect(landIdx).toBeGreaterThan(0);
+    for (let i = landIdx + 1; i < Math.min(landIdx + 4, frames.length); i++) {
+      expect(frames[i].d - frames[i - 1].d).toBeGreaterThan(0);
+    }
+    for (const f of frames) expect(f.shakeX).toBe(0);
+  });
+
+  it('a pose landing fires a decaying screen shake, exposed as sceneState.shakeX', () => {
+    const { engine, t } = poseEngine();
+    const frames: { shakeAbs: number; tags: string[] }[] = [];
+    let tt = t;
+    const step = (hipY: number) => {
+      tt += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY }), tt);
+      frames.push({
+        shakeAbs: Math.abs(engine.getSceneState().shakeX),
+        tags: engine.drainEvents().map((e) => e.tag),
+      });
+    };
+    for (const hipY of JUMP_PROFILE) step(hipY);
+    for (let i = 0; i < 40; i++) step(0.6);
+    const landIdx = frames.findIndex((f) => f.tags.includes('LAND'));
+    expect(landIdx).toBeGreaterThan(0);
+    // pre-landing: dead still
+    for (let i = 0; i < landIdx; i++) expect(frames[i].shakeAbs).toBe(0);
+    // impact: shake alive within a few frames...
+    const peak = Math.max(...frames.slice(landIdx, landIdx + 6).map((f) => f.shakeAbs));
+    expect(peak).toBeGreaterThan(0.003);
+    expect(peak).toBeLessThanOrEqual(JUICE.SHAKE_M + 1e-9);
+    // ...and fully decayed well under a second later
+    expect(frames[landIdx + 25].shakeAbs).toBeLessThan(0.001);
+  });
+
+  it('the anticipation dip shapes the CAMERA only — the gameplay jump arc is untouched', () => {
+    const { engine, t: t0 } = poseEngine();
+    // settle the camera at standing eye height
+    let t = t0;
+    for (let i = 0; i < 20; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6 }), t);
+    }
+    engine.drainEvents();
+    // launch a jump; find the trigger frame
+    let triggered = false;
+    let framesSinceTrigger = -1;
+    for (const hipY of [...ramp(0.6, 0.44, 4), ...Array(10).fill(0.44)]) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY }), t);
+      if (!triggered && engine.drainEvents().some((e) => e.tag === 'JUMP_TRIGGER')) {
+        triggered = true;
+        framesSinceTrigger = 0;
+        continue;
+      }
+      if (triggered) framesSinceTrigger++;
+      if (framesSinceTrigger === 1) {
+        const s = engine.getSceneState();
+        // arc: pure ballistic, NEVER bent (aerial coins ride on it)
+        const u = FRAME_MS / 1000 / DETECT.JUMP_DURATION_S;
+        const ballistic = 4 * DETECT.JUMP_APEX * u * (1 - u);
+        expect(Math.abs(s.jumpY - ballistic)).toBeLessThan(0.02);
+        // camera: still loading (dip holds the early rise down)
+        expect(s.cameraY).toBeLessThan(CAMERA.EYE + 0.05);
+      }
+      if (framesSinceTrigger === 10) {
+        // mid-arc: the camera rise is fully alive
+        expect(engine.getSceneState().cameraY).toBeGreaterThan(CAMERA.EYE + 0.3);
+      }
+    }
+    expect(triggered).toBe(true);
+    expect(framesSinceTrigger).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('RunnerEngine — head-mode camera feedback (look tilt)', () => {
+  it('holding a look-up tilts the camera up (bobScale-scaled)', () => {
+    const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    let t = calibrateHead(engine);
+    engine.startPlaying();
+    t = driveHead(engine, t, [...ramp(0.5, 0.66, 6), ...Array(20).fill(0.66)]);
+    expect(engine.getSceneState().cameraPitch).toBeGreaterThan(0.03);
+  });
+
+  it('bobScale=0 keeps the head-mode camera pitch dead flat', () => {
+    const engine = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    engine.setBobScale(0);
+    let t = calibrateHead(engine);
+    engine.startPlaying();
+    t = driveHead(engine, t, [...ramp(0.5, 0.66, 6), ...Array(20).fill(0.66)]);
+    expect(Math.abs(engine.getSceneState().cameraPitch)).toBeLessThan(1e-4);
   });
 });

@@ -120,9 +120,13 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
         </Chip>
       </div>
 
-      {/* center-top action cue */}
+      {/* center-top action cue — keyed per obstacle so every NEW cue pops
+          (scale-in, transform-only, motion-safe) — works in all modes */}
       {hud.cue && (
-        <div className="absolute left-1/2 top-16 -translate-x-1/2">
+        <div
+          key={hud.cue.obstacleId}
+          className="absolute left-1/2 top-16 -translate-x-1/2 motion-safe:animate-cue-pop [will-change:transform]"
+        >
           <ActionCue cue={hud.cue} lowImpact={hud.lowImpact} headMode={hud.headMode} />
         </div>
       )}
