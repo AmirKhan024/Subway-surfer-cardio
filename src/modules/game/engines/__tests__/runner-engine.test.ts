@@ -15,7 +15,7 @@ import {
   mulberry32,
   seedForAttempt,
 } from '../runner-timeline';
-import { COURSE, DETECT, CALIB, COIN } from '@/components/games/runner/runner-constants';
+import { COURSE, DETECT, CALIB, COIN, LOCO } from '@/components/games/runner/runner-constants';
 import type { NormalizedLandmark } from '../types';
 import { LM } from '../types';
 
@@ -1396,5 +1396,177 @@ describe('RunnerEngine — locomotion gating (march/jog to move)', () => {
     }
     expect(kb.getLocomotionState().gated).toBe(false);
     expect(kb.getSceneState().distance).toBeGreaterThan(0);
+  });
+});
+
+// ── B1: resume-near-obstacle fairness ──────────────────────────────────────
+// A locomotion stop coasts to a reaction-based margin before the plane, and
+// after ANY gated resume the plane cannot be crossed until the player has had
+// a real reaction window (released early once the correct action starts).
+describe('RunnerEngine — resume-near-obstacle fairness', () => {
+  function gatedEngine(): { engine: RunnerEngine; t: number } {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    const t = calibrate(engine);
+    engine.setLocomotionGating(true);
+    engine.startPlaying();
+    return { engine, t };
+  }
+
+  /** One marching frame; drains events into `log` stamped with the clock. */
+  function stepBounce(
+    engine: RunnerEngine,
+    t: number,
+    i: number,
+    log: { tag: string; t: number; data: Record<string, unknown> }[],
+  ): number {
+    t += FRAME_MS;
+    const hipY = 0.6 + 0.012 * Math.sin((2 * Math.PI * i) / 12);
+    engine.processFrame(makeFrame({ hipY }), t);
+    for (const e of engine.drainEvents()) log.push({ tag: e.tag, t, data: e.data });
+    return t;
+  }
+
+  function stepStill(
+    engine: RunnerEngine,
+    t: number,
+    log: { tag: string; t: number; data: Record<string, unknown> }[],
+  ): number {
+    t += FRAME_MS;
+    engine.processFrame(makeFrame({ hipY: 0.6 }), t);
+    for (const e of engine.drainEvents()) log.push({ tag: e.tag, t, data: e.data });
+    return t;
+  }
+
+  /** March until the world is within `withinM` of the first plane, then stop
+   *  until fully frozen. Returns clock + the first obstacle. */
+  function approachAndFreeze(
+    engine: RunnerEngine,
+    t0: number,
+    log: { tag: string; t: number; data: Record<string, unknown> }[],
+    withinM = 12,
+  ): { t: number; first: { atDistance: number; type: string; id: number } } {
+    const first = generateChunk(1337, 0, COURSE.LEAD_IN_M, 0)[0];
+    let t = t0;
+    let i = 0;
+    while (engine.getSceneState().distance < first.atDistance - withinM) {
+      t = stepBounce(engine, t, i++, log);
+      if (i > 2000) throw new Error('never approached the first obstacle');
+    }
+    for (let s = 0; s < 90; s++) t = stepStill(engine, t, log); // ~3s → frozen
+    expect(log.some((e) => e.tag === 'RUN_FREEZE')).toBe(true);
+    return { t, first };
+  }
+
+  it('a stop coasts to the reaction-based margin, never 0.6m from the plane', () => {
+    const { engine, t: t0 } = gatedEngine();
+    const log: { tag: string; t: number; data: Record<string, unknown> }[] = [];
+    const { first } = approachAndFreeze(engine, t0, log);
+    const halted = engine.getSceneState().distance;
+    const speed = engine.getSceneState().speed;
+    const margin = Math.max(LOCO.STOP_MARGIN_M, speed * LOCO.STOP_REACTION_S);
+    expect(first.atDistance - halted).toBeGreaterThanOrEqual(margin - 0.05);
+  });
+
+  it('resume without acting: the plane is not crossed until the reaction window elapses', () => {
+    const { engine, t: t0 } = gatedEngine();
+    const log: { tag: string; t: number; data: Record<string, unknown> }[] = [];
+    const { t: tFrozen, first } = approachAndFreeze(engine, t0, log);
+    log.length = 0; // drop run-start freeze/resume events — track THIS resume
+
+    // resume marching (small bounce = no squat/jump) until the plane resolves
+    let t = tFrozen;
+    let i = 0;
+    let maxBeforeResolve = 0;
+    while (!log.some((e) => e.tag === 'OBSTACLE') && i < 600) {
+      t = stepBounce(engine, t, i++, log);
+      if (!log.some((e) => e.tag === 'OBSTACLE')) {
+        maxBeforeResolve = Math.max(maxBeforeResolve, engine.getSceneState().distance);
+      }
+    }
+    const resume = log.find((e) => e.tag === 'RUN_RESUME');
+    const obstacle = log.find((e) => e.tag === 'OBSTACLE');
+    expect(resume).toBeDefined();
+    expect(obstacle).toBeDefined();
+    // the reaction window held (allow one frame of clock quantization)
+    expect(obstacle!.t - resume!.t).toBeGreaterThanOrEqual(LOCO.RESUME_REACTION_MS - FRAME_MS);
+    // ...and it is the grace doing the work, not a distant stop point:
+    // the world glided up to just short of the plane and held there
+    expect(maxBeforeResolve).toBeLessThan(first.atDistance);
+    expect(maxBeforeResolve).toBeGreaterThan(first.atDistance - 1);
+  });
+
+  it('acting during the grace releases it early and clears the obstacle', () => {
+    const { engine, t: t0 } = gatedEngine();
+    const log: { tag: string; t: number; data: Record<string, unknown> }[] = [];
+    const { t: tFrozen, first } = approachAndFreeze(engine, t0, log);
+    log.length = 0;
+
+    // resume marching until the world is holding just short of the plane
+    let t = tFrozen;
+    let i = 0;
+    while (engine.getSceneState().distance < first.atDistance - 0.5 && i < 600) {
+      t = stepBounce(engine, t, i++, log);
+    }
+    expect(log.some((e) => e.tag === 'RUN_RESUME')).toBe(true);
+    expect(log.some((e) => e.tag === 'OBSTACLE')).toBe(false); // still held
+
+    // perform the correct action for the obstacle type
+    const drain = () => {
+      for (const e of engine.drainEvents()) log.push({ tag: e.tag, t, data: e.data });
+    };
+    if (first.type === 'beam') {
+      // deep crouch (hip drop ≈ 0.08 raw ⇒ crouch ≈ 1) and hold
+      for (const hipY of [...ramp(0.6, 0.68, 4), ...Array(25).fill(0.68)]) {
+        t += FRAME_MS;
+        engine.processFrame(makeFrame({ hipY }), t);
+        drain();
+      }
+    } else {
+      // jump: fast large hip rise + return, then keep marching
+      for (const hipY of [...ramp(0.6, 0.44, 4), ...Array(6).fill(0.44), ...ramp(0.44, 0.6, 4)]) {
+        t += FRAME_MS;
+        engine.processFrame(makeFrame({ hipY }), t);
+        drain();
+      }
+      for (let k = 0; k < 20 && !log.some((e) => e.tag === 'OBSTACLE'); k++) {
+        t = stepBounce(engine, t, k, log);
+      }
+    }
+    const obstacle = log.find((e) => e.tag === 'OBSTACLE');
+    expect(obstacle).toBeDefined();
+    expect(obstacle!.data.cleared).toBe(true);
+    expect(engine.getRawData().obstaclesFailed).toBe(0);
+  });
+
+  it('a re-freeze during the grace re-arms a full fresh window on the next resume', () => {
+    const { engine, t: t0 } = gatedEngine();
+    const log: { tag: string; t: number; data: Record<string, unknown> }[] = [];
+    const { t: tFrozen } = approachAndFreeze(engine, t0, log);
+    log.length = 0;
+
+    // resume marching until the world is moving again (first grace armed)...
+    let t = tFrozen;
+    let i = 0;
+    for (; i < 30; i++) t = stepBounce(engine, t, i, log);
+    expect(log.filter((e) => e.tag === 'RUN_RESUME').length).toBe(1);
+    expect(log.some((e) => e.tag === 'OBSTACLE')).toBe(false);
+    // ...lose tracking mid-glide (instant freeze, no step-timeout wait)...
+    for (let s = 0; s < 12; s++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6, visible: false }), t);
+      for (const e of engine.drainEvents()) log.push({ tag: e.tag, t, data: e.data });
+    }
+    expect(log.some((e) => e.tag === 'RUN_FREEZE')).toBe(true);
+    expect(log.some((e) => e.tag === 'OBSTACLE')).toBe(false);
+    // ...and resume: the plane must hold for a FULL fresh window again
+    log.length = 0;
+    while (!log.some((e) => e.tag === 'OBSTACLE') && i < 2000) {
+      t = stepBounce(engine, t, i++, log);
+    }
+    const resume2 = log.find((e) => e.tag === 'RUN_RESUME');
+    const obstacle = log.find((e) => e.tag === 'OBSTACLE');
+    expect(resume2).toBeDefined();
+    expect(obstacle).toBeDefined();
+    expect(obstacle!.t - resume2!.t).toBeGreaterThanOrEqual(LOCO.RESUME_REACTION_MS - FRAME_MS);
   });
 });

@@ -146,6 +146,13 @@ export class RunnerEngine implements GameEngine {
   private sessionMs = 0;
   /** wall-ts when the world froze; 0 = live. Used to shift pending grace. */
   private frozenAt = 0;
+  /** until this ts the world may not cross the nearest unresolved plane —
+   *  armed on every gated resume so the player always gets cue + reaction
+   *  time (releases early once the correct action is underway). 0 = off. */
+  private resumeGraceUntil = 0;
+  /** the grace clamp extended the window once the plane was reached (the
+   *  glide back can eat the whole window otherwise) — one-shot per grace */
+  private resumeHoldExtended = false;
   /** why the run ended; null while running. Drives the game-over/report copy. */
   private endReason: 'time' | 'lives' | null = null;
   /** next chunk index for the endless obstacle stream */
@@ -356,6 +363,8 @@ export class RunnerEngine implements GameEngine {
     this.manuallyPaused = false;
     this.locomotionActive = true;
     this.frozenAt = 0;
+    this.resumeGraceUntil = 0;
+    this.resumeHoldExtended = false;
     this.endReason = null;
     this.cue = null;
     this.reactionMsList = [];
@@ -671,11 +680,14 @@ export class RunnerEngine implements GameEngine {
       if (!this.manuallyPaused && this.locomotionGating && this.speedFactor > 0) {
         this.speedFactor = Math.max(0, this.speedFactor - LOCO.DECEL_PER_S * dt);
         let step = this.speed * this.speedFactor * dt;
+        // reaction-based margin: halt far enough back that the resume ramp
+        // still leaves visible cue runway before the plane
+        const stopMargin = Math.max(LOCO.STOP_MARGIN_M, this.speed * LOCO.STOP_REACTION_S);
         for (let i = 0; i < this.obstacles.length; i++) {
           if (!this.resolved[i] && this.obstacles[i].atDistance > this.distance) {
             step = Math.min(
               step,
-              Math.max(0, this.obstacles[i].atDistance - LOCO.STOP_MARGIN_M - this.distance),
+              Math.max(0, this.obstacles[i].atDistance - stopMargin - this.distance),
             );
             break;
           }
@@ -691,6 +703,12 @@ export class RunnerEngine implements GameEngine {
       const frozenSpan = timestampMs - this.frozenAt;
       for (const p of this.pendingHurdles) p.crossTs += frozenSpan;
       this.frozenAt = 0;
+      // fairness: after any gated resume the nearest unresolved plane may
+      // not be crossed until the player has had a real reaction window
+      if (this.locomotionGating) {
+        this.resumeGraceUntil = timestampMs + LOCO.RESUME_REACTION_MS;
+        this.resumeHoldExtended = false;
+      }
       this.emit('RUN_RESUME', { frozenMs: Math.round(frozenSpan) });
     }
     this.speedFactor = Math.min(1, this.speedFactor + LOCO.ACCEL_PER_S * dt);
@@ -702,6 +720,45 @@ export class RunnerEngine implements GameEngine {
     this.speed = COURSE.SPEED_START + (COURSE.SPEED_END - COURSE.SPEED_START) * speedT;
     const prevDistance = this.distance;
     this.distance += this.speed * this.speedFactor * dt;
+
+    // 2b. resume grace: hold just short of the nearest unresolved plane
+    // until the reaction window elapses — unless the player is already
+    // performing the correct action, in which case release immediately so
+    // the crossing happens while the intent is fresh.
+    if (this.resumeGraceUntil !== 0) {
+      if (timestampMs >= this.resumeGraceUntil) {
+        this.resumeGraceUntil = 0;
+      } else {
+        for (let i = 0; i < this.obstacles.length; i++) {
+          if (this.resolved[i] || this.obstacles[i].atDistance <= prevDistance) continue;
+          const ob = this.obstacles[i];
+          const acted =
+            ob.type === 'beam'
+              ? this.crouch > DETECT.SQUAT_CLEAR
+              : this.jumpStartTs !== 0 ||
+                (this.lastJumpTriggerTs > 0 &&
+                  timestampMs - this.lastJumpTriggerTs <= DETECT.JUMP_PRE_WINDOW_MS);
+          if (acted) {
+            this.resumeGraceUntil = 0;
+          } else {
+            const hold = Math.max(prevDistance, ob.atDistance - LOCO.RESUME_HOLD_EPS_M);
+            if (this.distance > hold) {
+              this.distance = hold;
+              // the glide back to the plane may have eaten most of the
+              // window — guarantee a visible beat AT the plane (one-shot)
+              if (!this.resumeHoldExtended) {
+                this.resumeHoldExtended = true;
+                this.resumeGraceUntil = Math.max(
+                  this.resumeGraceUntil,
+                  timestampMs + LOCO.RESUME_HOLD_MIN_MS,
+                );
+              }
+            }
+          }
+          break;
+        }
+      }
+    }
 
     // 3. resolve obstacles whose action plane was crossed this frame
     for (let i = 0; i < this.obstacles.length; i++) {

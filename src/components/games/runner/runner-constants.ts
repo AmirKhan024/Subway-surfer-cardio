@@ -128,6 +128,25 @@ export const LOCO = {
   DECEL_PER_S: 1.8,
   /** never coast closer than this to an unresolved obstacle plane (m) */
   STOP_MARGIN_M: 0.6,
+  /** reaction-based coast margin: stop at least speed×this short of the
+   *  plane (so a resume always has visible cue runway ahead) */
+  STOP_REACTION_S: 0.75,
+  /** after a gated resume the world may not cross the nearest unresolved
+   *  plane for this long — guarantees cue + reaction time (releases early
+   *  the moment the player performs the correct action) */
+  RESUME_REACTION_MS: 900,
+  /** hold this short of the plane during resume grace (cue reads ~full) */
+  RESUME_HOLD_EPS_M: 0.05,
+  /** once the world actually reaches the plane, hold at least this long —
+   *  the resume glide can eat most of RESUME_REACTION_MS, so the plane
+   *  itself guarantees a visible beat to act in */
+  RESUME_HOLD_MIN_MS: 450,
+  /** hold speedFactor flat this long after a locomotion drop before
+   *  decaying — a brief detection gap must not visibly slow the world */
+  GAP_GRACE_MS: 450,
+  /** once locomotion has started this run, a re-start needs only this many
+   *  rhythmic crossings (first start keeps the full anti-twitch debounce) */
+  REARM_CROSSINGS: 2,
 } as const;
 
 // ── Game-feel juice (all scaled by bobScale → reduced-motion-safe) ──────
