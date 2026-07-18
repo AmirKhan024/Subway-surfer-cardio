@@ -16,7 +16,7 @@ import { RunnerEngine, type ControlMode } from '@/modules/game/engines/runner-en
 import type { RunnerRawData } from '@/types/raw-data';
 import type { PoseLandmarks } from '@/modules/pose/types';
 import type { CalibrationStatus } from '@/modules/game/engines/types';
-import { Volume2, VolumeX, X } from 'lucide-react';
+import { Pause, Volume2, VolumeX } from 'lucide-react';
 import { RunnerScene } from './runner-scene';
 import RunnerHUD, { type HudState } from './runner-hud';
 import { useCamera } from '@/lib/mediapipe/use-camera';
@@ -51,9 +51,15 @@ export interface RunnerLayerProps {
   seed: number;
   /** camera-bob amplitude 0..1 (comfort setting) */
   bobScale?: number;
+  /** active-workout session length in seconds (game-clock time) */
+  sessionSec?: number;
   debug?: boolean;
   onComplete: (raw: RunnerRawData) => void;
   onExit: () => void;
+  /** pause-menu Restart → fresh run, same settings, rotated seed */
+  onRestart: () => void;
+  /** pause-menu Quit → Home */
+  onQuit: () => void;
 }
 
 export default function RunnerLayer({
@@ -61,9 +67,12 @@ export default function RunnerLayer({
   lowImpact,
   seed,
   bobScale = 1,
+  sessionSec = 60,
   debug = false,
   onComplete,
   onExit,
+  onRestart,
+  onQuit,
 }: RunnerLayerProps) {
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -93,12 +102,29 @@ export default function RunnerLayer({
   /** bump to re-run the camera/pose boot effect after a failure */
   const [retryNonce, setRetryNonce] = useState(0);
   const [muted, setMuted] = useState(() => audioManager.isMuted());
-  const [confirmExit, setConfirmExit] = useState(false);
+  const [pauseMenu, setPauseMenu] = useState(false);
+  /** mirrors pauseMenu for the rAF loop (countdown hold) */
+  const pausedRef = useRef(false);
+  /** frozen countdown remaining while paused during the 3-2-1 */
+  const pausedCountdownRemainingRef = useRef(0);
 
   const toggleMute = useCallback(() => {
     const next = !audioManager.isMuted();
     audioManager.setMuted(next);
     setMuted(next);
+  }, []);
+
+  const openPause = useCallback(() => {
+    pausedRef.current = true;
+    pausedCountdownRemainingRef.current = Math.max(0, countdownEndRef.current - performance.now());
+    engineRef.current?.setPaused(true);
+    setPauseMenu(true);
+  }, []);
+
+  const resumeFromPause = useCallback(() => {
+    pausedRef.current = false;
+    engineRef.current?.setPaused(false);
+    setPauseMenu(false);
   }, []);
 
   const camera = useCamera();
@@ -181,6 +207,7 @@ export default function RunnerLayer({
     const engine = new RunnerEngine({ seed, controlMode, lowImpact });
     engine.setDebug(debug);
     engine.setBobScale(bobScale);
+    engine.setSessionMs(sessionSec * 1000);
     engineRef.current = engine;
     let scene: RunnerScene;
     try {
@@ -215,6 +242,10 @@ export default function RunnerLayer({
         }
         case 'countdown': {
           engine.processFrame(lms, now);
+          // real pause during the 3-2-1: hold the countdown where it stopped
+          if (pausedRef.current) {
+            countdownEndRef.current = now + pausedCountdownRemainingRef.current;
+          }
           const remaining = Math.max(0, countdownEndRef.current - now);
           const n = Math.ceil(remaining / 1000);
           if (n !== lastCountdownRef.current) {
@@ -275,6 +306,7 @@ export default function RunnerLayer({
           lowImpact: s.lowImpact,
           headMode: controlMode === 'head',
           coins: s.coinsCollected,
+          timerMs: engine.getTimerRemainingMs(),
         });
         const trackingNow =
           engine.isTracking() && (controlMode === 'keyboard' || now - lastSeenAtRef.current < 700);
@@ -317,7 +349,7 @@ export default function RunnerLayer({
       engineRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controlMode, lowImpact, seed, debug, bobScale]);
+  }, [controlMode, lowImpact, seed, debug, bobScale, sessionSec]);
 
   const retryCalibration = useCallback(() => {
     engineRef.current?.resetCalibration();
@@ -333,45 +365,54 @@ export default function RunnerLayer({
 
       {hud && uiPhase === 'playing' && <RunnerHUD hud={hud} />}
 
-      {/* mute + exit chips — usable mid-run */}
-      {(uiPhase === 'playing' || uiPhase === 'countdown') && (
-        <div className="absolute bottom-10 right-3 z-30 flex gap-2">
-          <button
-            onClick={toggleMute}
-            className="rounded-xl border border-white/15 bg-slate-950/60 p-2 text-slate-50 backdrop-blur-md"
-            aria-label={muted ? 'Unmute' : 'Mute'}
-          >
-            {muted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
-          </button>
-          <button
-            onClick={() => setConfirmExit(true)}
-            className="rounded-xl border border-white/15 bg-slate-950/60 p-2 text-slate-50 backdrop-blur-md"
-            aria-label="Leave the run"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+      {/* pause chip — top-right, safe-area aware, ≥44px tap target */}
+      {(uiPhase === 'playing' || uiPhase === 'countdown') && !pauseMenu && (
+        <button
+          onClick={openPause}
+          className="absolute right-3 z-30 flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-slate-950/60 text-slate-50 backdrop-blur-md"
+          style={{ top: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
+          aria-label="Pause"
+        >
+          <Pause className="h-5 w-5" />
+        </button>
       )}
 
-      {/* exit confirm — the run KEEPS going behind this (the engine runs on
-          wall-clock time; a true pause would need engine changes) */}
-      {confirmExit && uiPhase !== 'done' && (
+      {/* mute chip — usable mid-run */}
+      {(uiPhase === 'playing' || uiPhase === 'countdown') && (
+        <button
+          onClick={toggleMute}
+          className="absolute bottom-10 right-3 z-30 flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-slate-950/60 text-slate-50 backdrop-blur-md"
+          aria-label={muted ? 'Unmute' : 'Mute'}
+        >
+          {muted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+        </button>
+      )}
+
+      {/* REAL pause menu — the engine's game clock is halted (world + timer
+          frozen via the runActive gate), not a fake overlay */}
+      {pauseMenu && uiPhase !== 'done' && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/70 p-6 backdrop-blur-sm">
           <div className="w-full max-w-xs rounded-glass border border-white/10 bg-surface p-6 text-center">
-            <h3 className="font-heading text-xl font-bold text-slate-50">Leave the run?</h3>
-            <p className="mt-2 text-sm text-slate-300">Your progress won&apos;t be saved.</p>
-            <div className="mt-5 flex justify-center gap-3">
+            <h3 className="font-heading text-xl font-bold text-slate-50">Paused</h3>
+            <p className="mt-1 text-sm text-slate-400">The run and timer are on hold.</p>
+            <div className="mt-5 flex flex-col gap-2.5">
               <button
-                onClick={() => setConfirmExit(false)}
-                className="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950"
+                onClick={resumeFromPause}
+                className="rounded-xl bg-cyan-500 px-4 py-2.5 font-heading font-bold text-slate-950 transition hover:bg-cyan-400"
               >
                 Resume
               </button>
               <button
-                onClick={onExit}
-                className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-slate-200"
+                onClick={onRestart}
+                className="rounded-xl border border-cyan-400/40 bg-cyan-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
               >
-                Leave
+                Restart
+              </button>
+              <button
+                onClick={onQuit}
+                className="rounded-xl border border-white/20 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/5"
+              >
+                Quit
               </button>
             </div>
           </div>

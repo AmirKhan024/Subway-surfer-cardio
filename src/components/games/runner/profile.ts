@@ -15,6 +15,8 @@ export interface RunnerProfile {
   lowImpact: boolean;
   /** camera-bob amplitude: 0.4 gentle default, 0 under reduced-motion */
   bobScale: number;
+  /** active-workout session length in seconds (30/60/90); default 60 */
+  sessionSec?: number;
 }
 
 export const PROFILE_KEY = 'kr1-profile';

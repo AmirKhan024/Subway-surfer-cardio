@@ -35,6 +35,7 @@ export default function SetupScreen({
 }) {
   const [age, setAge] = useState<string>('35');
   const [gender, setGender] = useState<RunnerProfile['gender']>('male');
+  const [sessionSec, setSessionSec] = useState(60);
   const [showHow, setShowHow] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
 
@@ -43,6 +44,9 @@ export default function SetupScreen({
     if (saved) {
       setAge(String(saved.age));
       setGender(saved.gender);
+      if (saved.sessionSec === 30 || saved.sessionSec === 60 || saved.sessionSec === 90) {
+        setSessionSec(saved.sessionSec);
+      }
     }
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
       setReducedMotion(true);
@@ -64,6 +68,7 @@ export default function SetupScreen({
       gender,
       lowImpact: false, // UI removed — engine capability kept dormant
       bobScale: reducedMotion ? 0 : 0.4, // gentle default
+      sessionSec,
     };
     saveProfile(profile);
     onPlay(profile, mode);
@@ -112,6 +117,30 @@ export default function SetupScreen({
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="mt-4 text-sm text-slate-300">
+          Workout length
+          <div className="mt-2 flex gap-2">
+            {([30, 60, 90] as const).map((sec) => (
+              <button
+                key={sec}
+                type="button"
+                aria-pressed={sessionSec === sec}
+                onClick={() => setSessionSec(sec)}
+                className={
+                  sessionSec === sec
+                    ? 'rounded-full border border-cyan-400/50 bg-cyan-500/20 px-4 py-2 text-sm font-semibold text-cyan-100'
+                    : 'rounded-full border border-white/15 bg-slate-900/60 px-4 py-2 text-sm text-slate-300 transition hover:border-white/30'
+                }
+              >
+                {sec}s
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-slate-500">
+            Active movement time — the clock pauses while you rest.
+          </p>
         </div>
 
         <div className="mt-6 flex flex-col gap-3">

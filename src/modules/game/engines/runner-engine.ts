@@ -129,6 +129,23 @@ export class RunnerEngine implements GameEngine {
   private lastTs = 0;
   private playStartTs = 0;
 
+  // ── game clock / run gate ──
+  // The world, session timer, and elapsed advance ONLY while runActive():
+  // not manually paused, and (when locomotion gating is on — pose mode)
+  // the user is actively moving and tracked. Future reposition handling
+  // plugs into the same gate.
+  /** accumulated ACTIVE play time in ms (the only time base for the timer) */
+  private gameTimeMs = 0;
+  private manuallyPaused = false;
+  /** locomotion gate value; stays true unless gating is enabled (pose) */
+  private locomotionActive = true;
+  /** layer enables for pose mode only — head/keyboard keep auto-advance */
+  private locomotionGating = false;
+  /** session cap in ms; 0 = no timer (legacy/test behavior) */
+  private sessionMs = 0;
+  /** wall-ts when the world froze; 0 = live. Used to shift pending grace. */
+  private frozenAt = 0;
+
   // ── calibration ──
   private calHoldStart = 0; // 0 = not holding
   private calStartTs = 0;
@@ -290,6 +307,11 @@ export class RunnerEngine implements GameEngine {
     this.speed = COURSE.SPEED_START;
     this.lives = COURSE.LIVES;
     this.hitFlashAt = 0;
+    // game clock (sessionMs/locomotionGating are config — they survive reset)
+    this.gameTimeMs = 0;
+    this.manuallyPaused = false;
+    this.locomotionActive = true;
+    this.frozenAt = 0;
     this.cue = null;
     this.reactionMsList = [];
     this.squatReps = 0;
@@ -351,6 +373,41 @@ export class RunnerEngine implements GameEngine {
   setControlInput(input: Partial<ControlInput>): void {
     if (input.crouchHeld !== undefined) this.input.crouchHeld = input.crouchHeld;
     if (input.jumpPressed) this.input.jumpPressed = true;
+  }
+
+  /** Real pause: freezes world, session timer, and elapsed via the run gate. */
+  setPaused(paused: boolean): void {
+    this.manuallyPaused = paused;
+  }
+
+  isPaused(): boolean {
+    return this.manuallyPaused;
+  }
+
+  /** Session length in ms; 0 disables the timer (legacy behavior). */
+  setSessionMs(ms: number): void {
+    this.sessionMs = Math.max(0, ms);
+  }
+
+  /**
+   * Enable locomotion gating (pose mode only — the layer decides). When on,
+   * the world advances only while the user marches/jogs and is tracked.
+   * Off by default so head/keyboard (and the test suite) keep auto-advance.
+   */
+  setLocomotionGating(on: boolean): void {
+    this.locomotionGating = on;
+  }
+
+  /** ms remaining in the session, or null when no timer is set. */
+  getTimerRemainingMs(): number | null {
+    return this.sessionMs > 0 ? Math.max(0, this.sessionMs - this.gameTimeMs) : null;
+  }
+
+  /** The single gate world/timer advancement runs through. */
+  isRunActive(): boolean {
+    if (this.manuallyPaused) return false;
+    if (this.locomotionGating && (!this.locomotionActive || !this.trackingOk)) return false;
+    return true;
   }
 
   getControlMode(): ControlMode {
@@ -543,6 +600,27 @@ export class RunnerEngine implements GameEngine {
       return;
     }
 
+    // 1b. the run gate — while inactive the world holds in place (obstacles,
+    // timer, elapsed all freeze) and resumes smoothly. A camera/rest problem
+    // must never cost a life or skew the score.
+    if (!this.isRunActive()) {
+      if (this.frozenAt === 0) {
+        this.frozenAt = timestampMs;
+        this.emit('RUN_FREEZE', { paused: this.manuallyPaused, tracking: this.trackingOk });
+      }
+      this.updateCameraFeel(dt);
+      return;
+    }
+    if (this.frozenAt !== 0) {
+      // shift pending hurdle grace by the frozen span so a freeze mid-grace
+      // can't cause an instant unfair fail on resume
+      const frozenSpan = timestampMs - this.frozenAt;
+      for (const p of this.pendingHurdles) p.crossTs += frozenSpan;
+      this.frozenAt = 0;
+      this.emit('RUN_RESUME', { frozenMs: Math.round(frozenSpan) });
+    }
+    this.gameTimeMs += dt * 1000;
+
     // 2. world advance
     const len = courseLength(this.obstacles);
     const speedT = clamp01(this.distance / len);
@@ -581,8 +659,10 @@ export class RunnerEngine implements GameEngine {
     // 4. cue for the nearest unresolved obstacle
     this.updateCue(timestampMs);
 
-    // 5. finish conditions
-    if (this.lives <= 0 || this.resolved.every(Boolean)) {
+    // 5. finish conditions (session timer caps the fixed course — scoring
+    // bands stay calibrated on the 20-obstacle course)
+    const timeUp = this.sessionMs > 0 && this.gameTimeMs >= this.sessionMs;
+    if (this.lives <= 0 || this.resolved.every(Boolean) || timeUp) {
       this.phase = 'done';
       this.finalizePendingReps();
       this.emit('RUN_DONE', {
@@ -590,6 +670,7 @@ export class RunnerEngine implements GameEngine {
         resolved: this.resolved.filter(Boolean).length,
         cleared: this.clearedFlags.filter(Boolean).length,
         distance: this.distance,
+        reason: timeUp ? 'time' : this.lives <= 0 ? 'lives' : 'course',
       });
     }
 
@@ -922,6 +1003,12 @@ export class RunnerEngine implements GameEngine {
   }
 
   private finishSquatRep(): void {
+    // frozen world: repositioning/paused movement never counts as a rep
+    if (this.phase === 'playing' && !this.isRunActive()) {
+      this.squatPeak = 0;
+      this.headFlexPeakRep = 0;
+      return;
+    }
     if (this.squatPeak < DETECT.SQUAT_REP_MIN) {
       this.squatPeak = 0;
       this.headFlexPeakRep = 0;
@@ -1046,6 +1133,9 @@ export class RunnerEngine implements GameEngine {
   // ── shared jump arc (game-space) ──────────────────────────────────────
 
   private triggerJump(now: number): void {
+    // frozen world (paused / not marching / untracked): movement is not a rep
+    // and must not arm the intent-based hurdle clear
+    if (this.phase === 'playing' && !this.isRunActive()) return;
     this.jumpStartTs = now;
     this.lastJumpTriggerTs = now;
     this.jumpArmed = false;
@@ -1187,6 +1277,9 @@ export class RunnerEngine implements GameEngine {
       cleared: this.clearedFlags.filter(Boolean).length,
       total: this.obstacles.length,
       coins: this.coinsCollected,
+      timerMs: this.getTimerRemainingMs(),
+      paused: this.manuallyPaused,
+      runActive: this.isRunActive(),
     };
   }
 
@@ -1199,8 +1292,8 @@ export class RunnerEngine implements GameEngine {
     const cleared = this.clearedFlags.filter(Boolean).length;
     const failed = resolvedCount - cleared;
     const totalReps = this.squatReps + this.jumpReps;
-    const elapsed =
-      this.playStartTs > 0 ? Math.max(0, this.lastTs - this.playStartTs) : 0;
+    // ACTIVE play time — pauses/freezes never inflate the Time stat
+    const elapsed = this.gameTimeMs;
     const avgReaction =
       this.reactionMsList.length > 0
         ? this.reactionMsList.reduce((a, b) => a + b, 0) / this.reactionMsList.length

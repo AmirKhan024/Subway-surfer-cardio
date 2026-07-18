@@ -1098,3 +1098,159 @@ describe('RunnerRawData invariant', () => {
     expect(perfect.getRawData().assessmentValid).toBe(1);
   });
 });
+
+// ── game clock: runActive gate, real pause, session timer ─────────────────
+
+describe('RunnerEngine — game clock (runActive gate + pause + session timer)', () => {
+  it('manual pause freezes the world and session timer; resume continues from the same point', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    for (let i = 0; i < 60; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    const dBefore = engine.getSceneState().distance;
+    const timerBefore = engine.getTimerRemainingMs();
+    expect(dBefore).toBeGreaterThan(0);
+
+    engine.setPaused(true);
+    for (let i = 0; i < 90; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    expect(engine.isRunActive()).toBe(false);
+    expect(engine.getSceneState().distance).toBe(dBefore);
+    expect(engine.getTimerRemainingMs()).toBe(timerBefore);
+
+    engine.setPaused(false);
+    for (let i = 0; i < 30; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    expect(engine.getSceneState().distance).toBeGreaterThan(dBefore);
+    expect(engine.getTimerRemainingMs()!).toBeLessThan(timerBefore!);
+  });
+
+  it('session timer reaching 0 ends the run with reason "time" (fixed course capped by timer)', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(2000);
+    engine.startPlaying();
+    let t = 1000;
+    const reasons: string[] = [];
+    for (let i = 0; i < 400 && !engine.isComplete(); i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      for (const e of engine.drainEvents()) {
+        if (e.tag === 'RUN_DONE') reasons.push(String(e.data.reason));
+      }
+    }
+    expect(engine.isComplete()).toBe(true);
+    expect(reasons).toContain('time');
+    const raw = engine.getRawData();
+    expect(raw.elapsed).toBeGreaterThanOrEqual(2000);
+    // 2s at ~6m/s ≈ 12m — before the 30m lead-in ends, so no obstacle resolved
+    expect(raw.obstaclesFailed).toBe(0);
+  });
+
+  it('elapsed counts only ACTIVE time — a pause never inflates the Time stat', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    for (let i = 0; i < 30; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    } // ~1s active
+    engine.setPaused(true);
+    for (let i = 0; i < 60; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    } // ~2s paused
+    engine.setPaused(false);
+    for (let i = 0; i < 30; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    } // ~1s active
+    const elapsed = engine.getRawData().elapsed;
+    expect(elapsed).toBeGreaterThan(1700);
+    expect(elapsed).toBeLessThan(2300); // ≈2s of activity, NOT the 4s wall span
+  });
+
+  it('input while paused counts no reps and cannot arm a hurdle clear', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    for (let i = 0; i < 10; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    engine.setPaused(true);
+    engine.setControlInput({ jumpPressed: true });
+    for (let i = 0; i < 30; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    expect(engine.getRawData().jumpReps).toBe(0);
+    engine.setPaused(false);
+    for (let i = 0; i < 5; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    // the paused press was consumed and discarded — nothing fires on resume
+    expect(engine.getRawData().jumpReps).toBe(0);
+  });
+
+  it('a freeze during the post-crossing jump grace never causes an unfair fail', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    let firstHurdleId = -1;
+    let stage: 'run' | 'frozen' | 'after' = 'run';
+    let pausedFrames = 0;
+    let jumpedFor = -1;
+    for (let frames = 0; frames < 12000 && !engine.isComplete(); frames++) {
+      t += FRAME_MS;
+      const s = engine.getSceneState();
+      if (firstHurdleId === -1) {
+        const hurdles = s.obstacles.filter((o) => o.type === 'hurdle');
+        firstHurdleId = hurdles.reduce((a, b) => (a.zAhead < b.zAhead ? a : b)).id;
+      }
+      const first = s.obstacles.find((o) => o.id === firstHurdleId)!;
+      const cue = s.cue;
+      engine.setControlInput({ crouchHeld: cue?.type === 'beam' });
+      // play every OTHER hurdle perfectly
+      if (
+        cue?.type === 'hurdle' &&
+        cue.obstacleId !== firstHurdleId &&
+        cue.progress >= 0.8 &&
+        jumpedFor !== cue.obstacleId
+      ) {
+        jumpedFor = cue.obstacleId;
+        engine.setControlInput({ jumpPressed: true });
+      }
+      if (stage === 'run' && !first.resolved && first.zAhead <= 0) {
+        // crossed the first hurdle WITHOUT jumping → inside the 250ms grace.
+        // Freeze ~100ms into it for ~1s (far beyond the nominal grace).
+        if ((-first.zAhead / s.speed) * 1000 >= 100) {
+          engine.setPaused(true);
+          stage = 'frozen';
+        }
+      } else if (stage === 'frozen') {
+        pausedFrames++;
+        if (pausedFrames >= 30) {
+          engine.setPaused(false);
+          engine.setControlInput({ jumpPressed: true }); // late jump right after resume
+          stage = 'after';
+        }
+      }
+      engine.processFrame([], t);
+    }
+    const s = engine.getSceneState();
+    const first = s.obstacles.find((o) => o.id === firstHurdleId)!;
+    // the grace window was shifted by the frozen span → the resume-jump retro-clears
+    expect(first.resolved).toBe(true);
+    expect(first.cleared).toBe(true);
+    expect(engine.getRawData().obstaclesFailed).toBe(0);
+  });
+});

@@ -21,6 +21,13 @@ export interface HudState {
   headMode?: boolean;
   /** engagement only — never scored */
   coins: number;
+  /** session time remaining in ms (game-clock time), null = no timer */
+  timerMs: number | null;
+}
+
+function fmtTimer(ms: number): string {
+  const s = Math.ceil(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 function Chip({ children }: { children: React.ReactNode }) {
@@ -80,8 +87,21 @@ export function ActionCue({
 }
 
 export default function RunnerHUD({ hud }: { hud: HudState }) {
+  const timerLow = hud.timerMs !== null && hud.timerMs <= 10_000;
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
+      {/* session timer — active-movement time only (pauses/rests don't tick) */}
+      {hud.timerMs !== null && (
+        <div
+          className={`absolute left-1/2 top-3 -translate-x-1/2 rounded-xl border bg-slate-950/60 px-4 py-1.5 font-heading text-xl font-bold tabular-nums backdrop-blur-md ${
+            timerLow
+              ? 'border-amber-500/50 text-amber-300 motion-safe:animate-pulse'
+              : 'border-white/15 text-slate-50'
+          }`}
+        >
+          {fmtTimer(hud.timerMs)}
+        </div>
+      )}
       {/* top-left chips */}
       <div className="absolute left-3 top-3 flex gap-2">
         <Chip>Dist {Math.floor(hud.distance)}m</Chip>

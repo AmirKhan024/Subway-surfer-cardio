@@ -177,13 +177,17 @@ export default function Home() {
   if (screen === 'playing' && profile) {
     return (
       <RunnerLayer
+        key={attempt} // pause-menu Restart remounts the layer with a fresh seed
         controlMode={mode}
         lowImpact={profile.lowImpact}
         seed={seedForAttempt(attempt)}
         bobScale={profile.bobScale}
+        sessionSec={profile.sessionSec ?? 60}
         debug={debug}
         onComplete={handleComplete}
         onExit={() => setScreen('setup')}
+        onRestart={handleRunAgain}
+        onQuit={goHome}
       />
     );
   }
