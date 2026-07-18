@@ -130,6 +130,22 @@ export const LOCO = {
   STOP_MARGIN_M: 0.6,
 } as const;
 
+// ── Game-feel juice (all scaled by bobScale → reduced-motion-safe) ──────
+export const JUICE = {
+  /** landing spring: initial dip (m), oscillation Hz, exponential damping */
+  LAND_DIP_M: 0.06,
+  LAND_HZ: 5.0,
+  LAND_DAMP: 7,
+  LAND_DURATION_S: 0.7,
+  /** FOV punches (deg) + exponential decay rate (per s) */
+  FOV_PUNCH_JUMP: 5,
+  FOV_PUNCH_LAND: 3,
+  FOV_PUNCH_DECAY: 5,
+  /** jogging head-bob: amplitude (m) + fallback cadence (Hz) */
+  JOG_BOB_M: 0.02,
+  JOG_BOB_HZ: 2.2,
+} as const;
+
 // ── Course / world ───────────────────────────────────────────────────────
 export const COURSE = {
   OBSTACLES: 20,

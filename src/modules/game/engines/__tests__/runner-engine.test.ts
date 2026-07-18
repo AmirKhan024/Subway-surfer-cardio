@@ -1341,6 +1341,21 @@ describe('RunnerEngine — locomotion gating (march/jog to move)', () => {
     expect(engine.getSceneState().distance).toBeGreaterThan(dBefore); // never stalled
   });
 
+  it('every jump emits exactly one LAND event when the arc completes (game-feel hook)', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    engine.setControlInput({ jumpPressed: true });
+    const tags: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      for (const e of engine.drainEvents()) tags.push(e.tag);
+    }
+    expect(tags.filter((x) => x === 'JUMP_TRIGGER').length).toBe(1);
+    expect(tags.filter((x) => x === 'LAND').length).toBe(1);
+  });
+
   it('keyboard and head modes are never gated — auto-advance as before', () => {
     const kb = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
     kb.startPlaying();

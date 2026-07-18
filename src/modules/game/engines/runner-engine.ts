@@ -48,6 +48,7 @@ import {
   COIN,
   ASSESSMENT,
   LOCO,
+  JUICE,
 } from '@/components/games/runner/runner-constants';
 import type { RunnerRawData } from '@/types/raw-data';
 
@@ -360,6 +361,9 @@ export class RunnerEngine implements GameEngine {
     this.cameraY = CAMERA.EYE;
     this.cameraPitch = 0;
     this.fov = CAMERA.FOV_BASE;
+    this.landSpringT = -1;
+    this.fovPunch = 0;
+    this.jogBobT = 0;
 
     if (this.controlMode === 'keyboard') {
       // No camera baseline needed — keyboard is instantly "calibrated".
@@ -1347,6 +1351,7 @@ export class RunnerEngine implements GameEngine {
     this.jumpMeasuredPeak = 0;
     this.jumpReps += 1;
     this.recordReaction('jump', now);
+    this.fovPunch += JUICE.FOV_PUNCH_JUMP; // brief widen = speed/whoosh on lift
     this.emit('JUMP_TRIGGER', { mode: this.controlMode, lowImpact: this.lowImpact });
   }
 
@@ -1356,6 +1361,10 @@ export class RunnerEngine implements GameEngine {
     if (t >= DETECT.JUMP_DURATION_S) {
       this.bankJumpRep(false);
       this.jumpStartTs = 0;
+      // landing beat: drives the camera spring + FOV punch + layer dust burst
+      this.landSpringT = 0;
+      this.fovPunch += JUICE.FOV_PUNCH_LAND;
+      this.emit('LAND', { mode: this.controlMode });
     }
   }
 
@@ -1418,20 +1427,52 @@ export class RunnerEngine implements GameEngine {
   private cameraPitch = 0;
   private fov: number = CAMERA.FOV_BASE;
   private bobScale = 1;
+  /** landing spring clock, -1 = inactive (seconds since land) */
+  private landSpringT = -1;
+  /** decaying FOV punch (deg) added on jump lift + landing impact */
+  private fovPunch = 0;
+  /** jogging head-bob oscillator phase */
+  private jogBobT = 0;
 
   private updateCameraFeel(dt: number): void {
+    // landing impact: damped spring = quick dip + tiny overshoot-and-settle
+    let landOffset = 0;
+    if (this.landSpringT >= 0) {
+      this.landSpringT += dt;
+      if (this.landSpringT >= JUICE.LAND_DURATION_S) {
+        this.landSpringT = -1;
+      } else {
+        landOffset =
+          -JUICE.LAND_DIP_M *
+          Math.exp(-JUICE.LAND_DAMP * this.landSpringT) *
+          Math.cos(2 * Math.PI * JUICE.LAND_HZ * this.landSpringT);
+      }
+    }
+    // jogging head-bob: synced to detected cadence, fades with the world
+    // speed factor so it breathes to a stop with the runner
+    let jogBob = 0;
+    if (this.locomotionGating && this.locomotionActive) {
+      this.jogBobT += dt * 2 * Math.PI * JUICE.JOG_BOB_HZ;
+      jogBob = JUICE.JOG_BOB_M * Math.sin(this.jogBobT) * this.speedFactor;
+    }
     const targetY =
       CAMERA.EYE +
       this.bobScale *
         (-CAMERA.CROUCH_DIP * this.crouch +
-          (this.jumpY() / DETECT.JUMP_APEX) * CAMERA.JUMP_RISE_M);
+          (this.jumpY() / DETECT.JUMP_APEX) * CAMERA.JUMP_RISE_M +
+          landOffset +
+          jogBob);
     const a = Math.min(1, dt * CAMERA.DAMP);
     this.cameraY += (targetY - this.cameraY) * a;
     const targetPitch = CAMERA.PITCH_CROUCH * this.crouch * this.bobScale;
     this.cameraPitch += (targetPitch - this.cameraPitch) * a;
+    this.fovPunch = Math.max(0, this.fovPunch - this.fovPunch * JUICE.FOV_PUNCH_DECAY * dt);
     const speedNorm =
       (this.speed - COURSE.SPEED_START) / (COURSE.SPEED_END - COURSE.SPEED_START);
-    this.fov = CAMERA.FOV_BASE + CAMERA.FOV_SPEED_GAIN * clamp01(speedNorm);
+    this.fov =
+      CAMERA.FOV_BASE +
+      CAMERA.FOV_SPEED_GAIN * clamp01(speedNorm) +
+      this.fovPunch * (this.bobScale > 0 ? 1 : 0);
   }
 
   // ── outputs ───────────────────────────────────────────────────────────

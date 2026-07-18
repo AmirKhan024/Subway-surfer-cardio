@@ -76,12 +76,32 @@ const config: Config = {
           '0%': { opacity: '0', transform: 'translateY(6px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
+        fxLines: {
+          '0%': { opacity: '0', transform: 'scale(1.12)' },
+          '18%': { opacity: '0.85' },
+          '100%': { opacity: '0', transform: 'scale(1)' },
+        },
+        fxDust: {
+          '0%': { opacity: '0.9', transform: 'translate(0, 0) scale(1)' },
+          '100%': {
+            opacity: '0',
+            transform: 'translate(var(--dx, 0px), var(--dy, -40px)) scale(0.5)',
+          },
+        },
+        fxStreak: {
+          '0%': { opacity: '0', transform: 'translateY(-60%)' },
+          '25%': { opacity: '0.8' },
+          '100%': { opacity: '0', transform: 'translateY(140%)' },
+        },
       },
       animation: {
         'fade-up': 'fadeUp 0.5s ease-out',
         'slide-in': 'slideIn 0.3s ease-out',
         pulse: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'screen-in': 'screenIn 0.35s ease-out',
+        'fx-lines': 'fxLines 0.4s ease-out forwards',
+        'fx-dust': 'fxDust 0.5s ease-out forwards',
+        'fx-streak': 'fxStreak 0.45s ease-in forwards',
       },
     },
   },

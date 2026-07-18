@@ -45,6 +45,17 @@ function sfxForEvent(e: EngineEvent): SfxName | null {
 
 type UiPhase = 'booting' | 'calibrating' | 'countdown' | 'playing' | 'done';
 
+/** fixed dust-burst particle offsets (deterministic — no per-render random) */
+const DUST_PARTICLES = [
+  { dx: -70, dy: -34, size: 8 },
+  { dx: -42, dy: -58, size: 6 },
+  { dx: -16, dy: -40, size: 9 },
+  { dx: 12, dy: -62, size: 7 },
+  { dx: 38, dy: -44, size: 6 },
+  { dx: 66, dy: -30, size: 9 },
+  { dx: 0, dy: -26, size: 5 },
+] as const;
+
 export interface RunnerLayerProps {
   controlMode: ControlMode;
   lowImpact: boolean;
@@ -116,6 +127,15 @@ export default function RunnerLayer({
   } | null>(null);
   /** the user has marched at least once this run (onboarding vs stopped hint) */
   const everStartedRef = useRef(false);
+  /** screen-space juice timestamps (keyed CSS animations; 0 = never fired) */
+  const [fxLines, setFxLines] = useState(0);
+  const [fxDust, setFxDust] = useState(0);
+  const [fxStreak, setFxStreak] = useState(0);
+  const [reducedFx] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+  );
 
   const toggleMute = useCallback(() => {
     const next = !audioManager.isMuted();
@@ -290,6 +310,15 @@ export default function RunnerLayer({
         const sound = sfxForEvent(e);
         if (sound) audioManager.sfx(sound);
         if (e.tag === 'RUN_DONE') audioManager.duckMusic(2);
+        // screen-space juice (skipped under prefers-reduced-motion)
+        if (!reducedFx) {
+          if (e.tag === 'JUMP_TRIGGER') setFxLines(now);
+          if (e.tag === 'LAND') setFxDust(now);
+          if (e.tag === 'OBSTACLE' && e.data.type === 'beam' && e.data.cleared === true) {
+            setFxStreak(now);
+            audioManager.sfx('whoosh'); // beam whips overhead
+          }
+        }
       }
 
       scene.update(engine.getSceneState(), now);
@@ -389,6 +418,42 @@ export default function RunnerLayer({
       <video ref={videoRef} playsInline muted className="hidden" />
 
       {hud && uiPhase === 'playing' && <RunnerHUD hud={hud} />}
+
+      {/* screen-space juice — keyed so each event restarts its animation;
+          all end fully transparent (fill-forwards), zero per-frame cost */}
+      {fxLines > 0 && (
+        <div
+          key={`l${fxLines}`}
+          className="pointer-events-none absolute inset-0 z-20 animate-fx-lines"
+          style={{
+            background:
+              'repeating-conic-gradient(rgba(255,255,255,0.10) 0deg 1.2deg, transparent 1.2deg 9deg)',
+            maskImage: 'radial-gradient(circle at 50% 55%, transparent 38%, black 80%)',
+            WebkitMaskImage: 'radial-gradient(circle at 50% 55%, transparent 38%, black 80%)',
+          }}
+        />
+      )}
+      {fxDust > 0 && (
+        <div key={`d${fxDust}`} className="pointer-events-none absolute inset-x-0 bottom-16 z-20 flex justify-center">
+          <div className="relative">
+            {DUST_PARTICLES.map((p, i) => (
+              <span
+                key={i}
+                className="absolute rounded-full bg-amber-100/60 animate-fx-dust"
+                style={{
+                  width: p.size,
+                  height: p.size,
+                  ['--dx' as string]: `${p.dx}px`,
+                  ['--dy' as string]: `${p.dy}px`,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {fxStreak > 0 && (
+        <div key={`s${fxStreak}`} className="pointer-events-none absolute inset-x-0 top-0 z-20 h-24 animate-fx-streak bg-gradient-to-b from-white/25 to-transparent" />
+      )}
 
       {/* pause chip — top-right, safe-area aware, ≥44px tap target */}
       {(uiPhase === 'playing' || uiPhase === 'countdown') && !pauseMenu && (
