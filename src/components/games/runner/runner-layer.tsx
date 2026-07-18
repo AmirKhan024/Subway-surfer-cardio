@@ -310,8 +310,10 @@ export default function RunnerLayer({
         const sound = sfxForEvent(e);
         if (sound) audioManager.sfx(sound);
         if (e.tag === 'RUN_DONE') audioManager.duckMusic(2);
-        // screen-space juice (skipped under prefers-reduced-motion)
-        if (!reducedFx) {
+        // screen-space juice — BODY mode only (neck ROM look-ups fire the
+        // same jump arc; mounting fullscreen fx per look-up caused the
+        // head-mode lag) and skipped under prefers-reduced-motion
+        if (!reducedFx && controlMode === 'pose') {
           if (e.tag === 'JUMP_TRIGGER') setFxLines(now);
           if (e.tag === 'LAND') setFxDust(now);
           if (e.tag === 'OBSTACLE' && e.data.type === 'beam' && e.data.cleared === true) {
@@ -420,11 +422,14 @@ export default function RunnerLayer({
       {hud && uiPhase === 'playing' && <RunnerHUD hud={hud} />}
 
       {/* screen-space juice — keyed so each event restarts its animation;
-          all end fully transparent (fill-forwards), zero per-frame cost */}
+          UNMOUNTED on animation end (no lingering compositor layers — the
+          finished fullscreen-gradient layer was part of the head-mode lag);
+          transform/opacity only + will-change for GPU compositing */}
       {fxLines > 0 && (
         <div
           key={`l${fxLines}`}
-          className="pointer-events-none absolute inset-0 z-20 animate-fx-lines"
+          onAnimationEnd={() => setFxLines(0)}
+          className="pointer-events-none absolute inset-0 z-20 animate-fx-lines [will-change:opacity,transform]"
           style={{
             background:
               'repeating-conic-gradient(rgba(255,255,255,0.10) 0deg 1.2deg, transparent 1.2deg 9deg)',
@@ -434,12 +439,16 @@ export default function RunnerLayer({
         />
       )}
       {fxDust > 0 && (
-        <div key={`d${fxDust}`} className="pointer-events-none absolute inset-x-0 bottom-16 z-20 flex justify-center">
+        <div
+          key={`d${fxDust}`}
+          onAnimationEnd={() => setFxDust(0)}
+          className="pointer-events-none absolute inset-x-0 bottom-16 z-20 flex justify-center"
+        >
           <div className="relative">
             {DUST_PARTICLES.map((p, i) => (
               <span
                 key={i}
-                className="absolute rounded-full bg-amber-100/60 animate-fx-dust"
+                className="absolute rounded-full bg-amber-100/60 animate-fx-dust [will-change:opacity,transform]"
                 style={{
                   width: p.size,
                   height: p.size,
@@ -452,7 +461,11 @@ export default function RunnerLayer({
         </div>
       )}
       {fxStreak > 0 && (
-        <div key={`s${fxStreak}`} className="pointer-events-none absolute inset-x-0 top-0 z-20 h-24 animate-fx-streak bg-gradient-to-b from-white/25 to-transparent" />
+        <div
+          key={`s${fxStreak}`}
+          onAnimationEnd={() => setFxStreak(0)}
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-24 animate-fx-streak bg-gradient-to-b from-white/25 to-transparent [will-change:opacity,transform]"
+        />
       )}
 
       {/* pause chip — top-right, safe-area aware, ≥44px tap target */}

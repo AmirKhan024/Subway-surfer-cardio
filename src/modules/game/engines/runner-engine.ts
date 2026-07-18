@@ -1355,7 +1355,8 @@ export class RunnerEngine implements GameEngine {
     this.jumpMeasuredPeak = 0;
     this.jumpReps += 1;
     this.recordReaction('jump', now);
-    this.fovPunch += JUICE.FOV_PUNCH_JUMP; // brief widen = speed/whoosh on lift
+    // juice is BODY-mode feel only — neck ROM has no physical jump/landing
+    if (this.controlMode === 'pose') this.fovPunch += JUICE.FOV_PUNCH_JUMP;
     this.emit('JUMP_TRIGGER', { mode: this.controlMode, lowImpact: this.lowImpact });
   }
 
@@ -1365,9 +1366,11 @@ export class RunnerEngine implements GameEngine {
     if (t >= DETECT.JUMP_DURATION_S) {
       this.bankJumpRep(false);
       this.jumpStartTs = 0;
-      // landing beat: drives the camera spring + FOV punch + layer dust burst
-      this.landSpringT = 0;
-      this.fovPunch += JUICE.FOV_PUNCH_LAND;
+      // landing beat: BODY-mode feel only (neck ROM has no physical landing)
+      if (this.controlMode === 'pose') {
+        this.landSpringT = 0;
+        this.fovPunch += JUICE.FOV_PUNCH_LAND;
+      }
       this.emit('LAND', { mode: this.controlMode });
     }
   }
