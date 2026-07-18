@@ -6,10 +6,11 @@
  * Punchy stats only; the breakdown lives on the report screen.
  * Diagnostics widgets render only under ?debug=1.
  */
-import { HeartCrack, Trophy } from 'lucide-react';
+import { HeartCrack, Hourglass, Trophy } from 'lucide-react';
 import type { RunnerRawData } from '@/types/raw-data';
 import { COURSE } from './runner-constants';
 import { CopyDiagnosticsButton, LogsPanel } from './diagnostics-widgets';
+import { gameOverCopy, type EndReason } from './gameover-copy';
 import { BackButton, MuteButton } from './screen-chrome';
 
 function BigStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
@@ -29,19 +30,21 @@ function BigStat({ label, value, accent }: { label: string; value: string; accen
 
 export default function GameOverScreen({
   raw,
+  reason,
   onSeeReport,
   onRunAgain,
   onHome,
   debug = false,
 }: {
   raw: RunnerRawData;
+  /** the engine's RUN_DONE reason — the ONLY source of the win/lose branch */
+  reason: EndReason;
   onSeeReport: () => void;
   onRunAgain: () => void;
   onHome: () => void;
   debug?: boolean;
 }) {
-  const resolved = raw.obstaclesCleared + raw.obstaclesFailed;
-  const completed = resolved >= raw.obstaclesTotal;
+  const copy = gameOverCopy(reason);
   const livesLeft = Math.max(0, COURSE.LIVES - raw.obstaclesFailed);
 
   return (
@@ -49,23 +52,21 @@ export default function GameOverScreen({
       <BackButton onClick={onHome} />
       <MuteButton />
       <div className="w-full max-w-md rounded-glass border border-white/10 bg-surface p-8 text-center shadow-glass">
-        {completed ? (
+        {copy.tone === 'win' ? (
           <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-cyan-400/40 bg-cyan-500/10 shadow-[0_0_40px_rgba(6,182,212,0.35)]">
-            <Trophy className="h-10 w-10 text-amber-400" />
+            {reason === 'time' ? (
+              <Hourglass className="h-10 w-10 text-amber-400" />
+            ) : (
+              <Trophy className="h-10 w-10 text-amber-400" />
+            )}
           </div>
         ) : (
           <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-rose-400/25 bg-slate-800/70 shadow-[0_0_28px_rgba(244,63,94,0.15)]">
             <HeartCrack className="h-10 w-10 text-rose-300" />
           </div>
         )}
-        <h1 className="mt-4 font-heading text-4xl font-black text-slate-50">
-          {completed ? 'Run Complete!' : 'Out of lives'}
-        </h1>
-        <p className="mt-2 text-sm text-slate-300">
-          {completed
-            ? 'You cleared the course — great moving!'
-            : "Nice run — you'll get further next time."}
-        </p>
+        <h1 className="mt-4 font-heading text-4xl font-black text-slate-50">{copy.title}</h1>
+        <p className="mt-2 text-sm text-slate-300">{copy.sub}</p>
 
         <div className="mt-6 grid grid-cols-3 gap-2 sm:gap-3">
           <BigStat label="Distance" value={`${Math.round(raw.distance)}m`} />

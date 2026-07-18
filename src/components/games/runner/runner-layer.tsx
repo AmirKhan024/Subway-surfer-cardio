@@ -65,7 +65,7 @@ export interface RunnerLayerProps {
   /** active-workout session length in seconds (game-clock time) */
   sessionSec?: number;
   debug?: boolean;
-  onComplete: (raw: RunnerRawData) => void;
+  onComplete: (raw: RunnerRawData, reason: 'time' | 'lives' | 'course' | null) => void;
   onExit: () => void;
   /** pause-menu Restart → fresh run, same settings, rotated seed */
   onRestart: () => void;
@@ -296,7 +296,7 @@ export default function RunnerLayer({
           engine.processFrame(lms, now);
           if (engine.isComplete()) {
             setPhase('done');
-            onCompleteRef.current(engine.getRawData());
+            onCompleteRef.current(engine.getRawData(), engine.getEndReason());
           }
           break;
         }

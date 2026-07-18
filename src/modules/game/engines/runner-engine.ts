@@ -147,6 +147,8 @@ export class RunnerEngine implements GameEngine {
   private sessionMs = 0;
   /** wall-ts when the world froze; 0 = live. Used to shift pending grace. */
   private frozenAt = 0;
+  /** why the run ended; null while running. Drives the game-over/report copy. */
+  private endReason: 'time' | 'lives' | 'course' | null = null;
 
   // ── calibration ──
   private calHoldStart = 0; // 0 = not holding
@@ -351,6 +353,7 @@ export class RunnerEngine implements GameEngine {
     this.manuallyPaused = false;
     this.locomotionActive = true;
     this.frozenAt = 0;
+    this.endReason = null;
     this.cue = null;
     this.reactionMsList = [];
     this.squatReps = 0;
@@ -734,12 +737,13 @@ export class RunnerEngine implements GameEngine {
     if (this.lives <= 0 || this.resolved.every(Boolean) || timeUp) {
       this.phase = 'done';
       this.finalizePendingReps();
+      this.endReason = timeUp ? 'time' : this.lives <= 0 ? 'lives' : 'course';
       this.emit('RUN_DONE', {
         lives: this.lives,
         resolved: this.resolved.filter(Boolean).length,
         cleared: this.clearedFlags.filter(Boolean).length,
         distance: this.distance,
-        reason: timeUp ? 'time' : this.lives <= 0 ? 'lives' : 'course',
+        reason: this.endReason,
       });
     }
 
@@ -1531,6 +1535,11 @@ export class RunnerEngine implements GameEngine {
 
   isComplete(): boolean {
     return this.phase === 'done';
+  }
+
+  /** Why the run ended (null while running) — never infer this from lives. */
+  getEndReason(): 'time' | 'lives' | 'course' | null {
+    return this.endReason;
   }
 
   getRawData(): RunnerRawData {

@@ -128,6 +128,7 @@ export default function Home() {
   const [mode, setMode] = useState<PlayMode>('pose');
   const [attempt, setAttempt] = useState(0);
   const [lastRaw, setLastRaw] = useState<RunnerRawData | null>(null);
+  const [endReason, setEndReason] = useState<'time' | 'lives' | 'course' | null>(null);
   const [debug] = useState(
     () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug'),
   );
@@ -152,9 +153,10 @@ export default function Home() {
   }, []);
 
   const handleComplete = useCallback(
-    (raw: RunnerRawData) => {
+    (raw: RunnerRawData, reason: 'time' | 'lives' | 'course' | null) => {
       if (profile) emitRunReport(raw, profile, mode, attempt, debug);
       setLastRaw(raw);
+      setEndReason(reason);
       setScreen('gameover'); // celebratory beat first; report follows
     },
     [profile, mode, attempt, debug],
@@ -196,6 +198,7 @@ export default function Home() {
     return wrap(
       <GameOverScreen
         raw={lastRaw}
+        reason={endReason}
         onSeeReport={() => setScreen('report')}
         onRunAgain={handleRunAgain}
         onHome={goHome}
@@ -208,6 +211,7 @@ export default function Home() {
     return wrap(
       <ReportScreen
         raw={lastRaw}
+        reason={endReason}
         age={profile.age}
         onRunAgain={handleRunAgain}
         onHome={goHome}

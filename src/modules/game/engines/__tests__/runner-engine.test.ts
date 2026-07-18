@@ -1148,6 +1148,10 @@ describe('RunnerEngine — game clock (runActive gate + pause + session timer)',
     }
     expect(engine.isComplete()).toBe(true);
     expect(reasons).toContain('time');
+    // REGRESSION (playtest): the end reason is 'time' while ALL lives remain —
+    // the UI must never infer "Out of lives" from anything but this reason
+    expect(engine.getEndReason()).toBe('time');
+    expect(engine.getSceneState().lives).toBe(3);
     const raw = engine.getRawData();
     expect(raw.elapsed).toBeGreaterThanOrEqual(2000);
     // 2s at ~6m/s ≈ 12m — before the 30m lead-in ends, so no obstacle resolved

@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import type { RunnerRawData } from '@/types/raw-data';
 import { computeKR1Score, type KR1ScoreResult } from '@/lib/scoring/kr1-local';
 import { CopyDiagnosticsButton, LogsPanel } from './diagnostics-widgets';
+import { reportHeading, type EndReason } from './gameover-copy';
 import ProgressRing from './progress-ring';
 import { BackButton, MuteButton } from './screen-chrome';
 import { useAnimatedProgress } from './use-animated-progress';
@@ -114,12 +115,15 @@ function AgeBar({ age, musculage, better }: { age: number; musculage: number; be
 
 export default function ReportScreen({
   raw,
+  reason,
   age,
   onRunAgain,
   onHome,
   debug = false,
 }: {
   raw: RunnerRawData;
+  /** the engine's RUN_DONE reason — drives the heading, never lives/resolved */
+  reason: EndReason;
   age: number;
   onRunAgain: () => void;
   onHome: () => void;
@@ -159,7 +163,6 @@ export default function ReportScreen({
 
   if (!score) return null;
 
-  const finished = raw.obstaclesCleared + raw.obstaclesFailed >= raw.obstaclesTotal;
   const conditionedPct = Math.min(100, Math.round(score.conditioned * 100));
   // KR1N = head/neck-ROM run: present neck labels, never squat/jump labels
   const isHeadRun = raw.testId === 'KR1N';
@@ -176,7 +179,7 @@ export default function ReportScreen({
       <div className="w-full max-w-md rounded-glass border border-white/10 bg-surface p-7 shadow-glass">
         <div className="flex items-baseline justify-between">
           <h1 className="font-heading text-2xl font-bold text-slate-50">
-            {finished ? 'Course complete!' : 'Run over'}
+            {reportHeading(reason)}
           </h1>
           <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-cyan-300">
             {isHeadRun ? 'Neck ROM Runner' : 'Runner Fitness'}
