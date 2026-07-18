@@ -1254,3 +1254,102 @@ describe('RunnerEngine — game clock (runActive gate + pause + session timer)',
     expect(engine.getRawData().obstaclesFailed).toBe(0);
   });
 });
+
+// ── locomotion gating: march/jog in place to move (pose mode) ─────────────
+
+describe('RunnerEngine — locomotion gating (march/jog to move)', () => {
+  /** whole-body bounce: makeFrame's hipY shifts shoulders+hips together —
+   *  a small rhythmic oscillation, exactly like marching in place. */
+  function driveBounce(engine: RunnerEngine, t: number, frames: number, amp = 0.012): number {
+    for (let i = 0; i < frames; i++) {
+      t += FRAME_MS;
+      const hipY = 0.6 + amp * Math.sin((2 * Math.PI * i) / 12); // ~2.5Hz
+      engine.processFrame(makeFrame({ hipY }), t);
+    }
+    return t;
+  }
+
+  function driveStill(engine: RunnerEngine, t: number, frames: number): number {
+    for (let i = 0; i < frames; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6 }), t);
+    }
+    return t;
+  }
+
+  function gatedEngine(): { engine: RunnerEngine; t: number } {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    const t = calibrate(engine);
+    engine.setLocomotionGating(true);
+    engine.startPlaying();
+    return { engine, t };
+  }
+
+  it('world holds until marching starts; rhythmic bounce activates locomotion', () => {
+    const { engine, t: t0 } = gatedEngine();
+    let t = driveStill(engine, t0, 30); // ~1s standing
+    expect(engine.getLocomotionState().active).toBe(false);
+    expect(engine.getSceneState().distance).toBe(0);
+
+    t = driveBounce(engine, t, 90); // ~3s of marching
+    expect(engine.getLocomotionState().started).toBe(true);
+    expect(engine.getLocomotionState().active).toBe(true);
+    expect(engine.getSceneState().distance).toBeGreaterThan(0);
+  });
+
+  it('stopping decays locomotion after the step timeout and the world halts smoothly', () => {
+    const { engine, t: t0 } = gatedEngine();
+    let t = driveBounce(engine, t0, 90);
+    expect(engine.getLocomotionState().active).toBe(true);
+
+    t = driveStill(engine, t, 90); // ~3s stopped: timeout (1.2s) + decel tail
+    expect(engine.getLocomotionState().active).toBe(false);
+    const halted = engine.getSceneState().distance;
+    t = driveStill(engine, t, 30);
+    expect(engine.getSceneState().distance).toBe(halted); // fully at rest
+    // elapsed excludes the stopped span (active time only)
+    expect(engine.getRawData().elapsed).toBeLessThan(4000);
+  });
+
+  it('a single jump is a large transient — it never reads as locomotion', () => {
+    const { engine, t: t0 } = gatedEngine();
+    let t = driveStill(engine, t0, 15);
+    // jump: fast big hip rise and return (far beyond LOCO.MAX_AMP)
+    const jumpProfile = [...ramp(0.6, 0.44, 4), ...Array(6).fill(0.44), ...ramp(0.44, 0.6, 4)];
+    for (const hipY of jumpProfile) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY }), t);
+    }
+    t = driveStill(engine, t, 30);
+    expect(engine.getLocomotionState().started).toBe(false);
+    expect(engine.getSceneState().distance).toBe(0);
+  });
+
+  it('momentum carries locomotion THROUGH a jump instead of stalling', () => {
+    const { engine, t: t0 } = gatedEngine();
+    let t = driveBounce(engine, t0, 90);
+    const dBefore = engine.getSceneState().distance;
+    expect(engine.getLocomotionState().active).toBe(true);
+
+    // jump mid-run (~0.45s of large excursion, no steps)
+    const jumpProfile = [...ramp(0.6, 0.44, 4), ...Array(6).fill(0.44), ...ramp(0.44, 0.6, 4)];
+    for (const hipY of jumpProfile) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY }), t);
+    }
+    expect(engine.getLocomotionState().active).toBe(true); // momentum coasted
+    expect(engine.getSceneState().distance).toBeGreaterThan(dBefore); // never stalled
+  });
+
+  it('keyboard and head modes are never gated — auto-advance as before', () => {
+    const kb = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    kb.startPlaying();
+    let t = 1000;
+    for (let i = 0; i < 30; i++) {
+      t += FRAME_MS;
+      kb.processFrame([], t);
+    }
+    expect(kb.getLocomotionState().gated).toBe(false);
+    expect(kb.getSceneState().distance).toBeGreaterThan(0);
+  });
+});

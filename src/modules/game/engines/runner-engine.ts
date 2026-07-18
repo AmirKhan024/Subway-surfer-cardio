@@ -47,6 +47,7 @@ import {
   HEAD,
   COIN,
   ASSESSMENT,
+  LOCO,
 } from '@/components/games/runner/runner-constants';
 import type { RunnerRawData } from '@/types/raw-data';
 
@@ -199,6 +200,31 @@ export class RunnerEngine implements GameEngine {
   private driftSince = 0;
   private driftActive = false;
 
+  // ── locomotion (march/jog in place; pose gating only) ──
+  /** calibrated shoulder-mid → hip-mid vertical distance (the scale ref) */
+  private torsoLen0 = 0;
+  /** slow EMA neutral line for the upper-body bounce */
+  private locoBaseline = 0;
+  private locoBaselineReady = false;
+  /** last nonzero direction of the detrended bounce (+1 up / -1 down) */
+  private locoPrevSign = 0;
+  /** timestamps of recent qualifying direction-changes (rhythm window) */
+  private locoCrossTimes: number[] = [];
+  private lastStepTs = 0;
+  /** debounced start achieved (requires rhythmic cadence, not one twitch) */
+  private locoStarted = false;
+  /** step phase for the game-feel head-bob (advances π per crossing) */
+  private stepPhase = 0;
+  /** per-knee baselines + last lifted leg for the knee-lift confirmation */
+  private kneeBaseL = 0;
+  private kneeBaseR = 0;
+  private kneeBaseReady = false;
+  private kneeLiftedL = false;
+  private kneeLiftedR = false;
+  private lastKneeLeg: 'L' | 'R' | null = null;
+  /** eased world-speed factor for smooth stop/start (locomotion gating) */
+  private speedFactor = 1;
+
   // ── world ──
   private obstacles: Obstacle[] = [];
   private resolved: boolean[] = [];
@@ -282,6 +308,18 @@ export class RunnerEngine implements GameEngine {
     this.trackingOk = false;
     this.driftSince = 0;
     this.driftActive = false;
+    this.torsoLen0 = 0;
+    this.locoBaselineReady = false;
+    this.locoPrevSign = 0;
+    this.locoCrossTimes = [];
+    this.lastStepTs = 0;
+    this.locoStarted = false;
+    this.stepPhase = 0;
+    this.kneeBaseReady = false;
+    this.kneeLiftedL = false;
+    this.kneeLiftedR = false;
+    this.lastKneeLeg = null;
+    this.speedFactor = 1;
     this.neckEmaReady = false;
     this.neckNeutral = 0;
     this.calNeckSamples = [];
@@ -512,6 +550,13 @@ export class RunnerEngine implements GameEngine {
           this.calHipSamples.reduce((a, b) => a + b, 0) / this.calHipSamples.length;
         const heels = this.heelYOf(landmarks);
         this.heelY0 = heels ?? this.hipY0 + 0.35;
+        // locomotion scale reference: torso length (shoulder-mid → hip-mid).
+        // Normalizing the bounce by this — never raw frame units — is what
+        // keeps march detection identical across devices/distances.
+        const sMidY =
+          (landmarks[LM.LEFT_SHOULDER].y + landmarks[LM.RIGHT_SHOULDER].y) / 2;
+        const hMidY = (landmarks[LM.LEFT_HIP].y + landmarks[LM.RIGHT_HIP].y) / 2;
+        this.torsoLen0 = Math.max(0.08, Math.abs(hMidY - sMidY));
       }
       this.calibrated = true;
       this.phase = 'ready';
@@ -579,6 +624,8 @@ export class RunnerEngine implements GameEngine {
     if (!this.calibrated && this.controlMode !== 'keyboard') return;
     this.phase = 'playing';
     this.playStartTs = this.lastTs;
+    // gated runs begin at rest — the world moves when the user does
+    this.speedFactor = this.locomotionGating ? 0 : 1;
   }
 
   processFrame(landmarks: NormalizedLandmark[], timestampMs: number): void {
@@ -600,13 +647,30 @@ export class RunnerEngine implements GameEngine {
       return;
     }
 
-    // 1b. the run gate — while inactive the world holds in place (obstacles,
-    // timer, elapsed all freeze) and resumes smoothly. A camera/rest problem
-    // must never cost a life or skew the score.
+    // 1b. the run gate — while inactive the world holds (obstacles, timer,
+    // elapsed all freeze) and resumes smoothly. A camera/rest problem must
+    // never cost a life or skew the score.
     if (!this.isRunActive()) {
       if (this.frozenAt === 0) {
         this.frozenAt = timestampMs;
         this.emit('RUN_FREEZE', { paused: this.manuallyPaused, tracking: this.trackingOk });
+      }
+      // Locomotion stops decelerate to a halt (never a hard stop — that feels
+      // broken), clamped so the coast can NEVER cross an unresolved obstacle
+      // plane. Manual pause freezes instantly — that's user intent.
+      if (!this.manuallyPaused && this.locomotionGating && this.speedFactor > 0) {
+        this.speedFactor = Math.max(0, this.speedFactor - LOCO.DECEL_PER_S * dt);
+        let step = this.speed * this.speedFactor * dt;
+        for (let i = 0; i < this.obstacles.length; i++) {
+          if (!this.resolved[i] && this.obstacles[i].atDistance > this.distance) {
+            step = Math.min(
+              step,
+              Math.max(0, this.obstacles[i].atDistance - LOCO.STOP_MARGIN_M - this.distance),
+            );
+            break;
+          }
+        }
+        this.distance += step;
       }
       this.updateCameraFeel(dt);
       return;
@@ -619,6 +683,7 @@ export class RunnerEngine implements GameEngine {
       this.frozenAt = 0;
       this.emit('RUN_RESUME', { frozenMs: Math.round(frozenSpan) });
     }
+    this.speedFactor = Math.min(1, this.speedFactor + LOCO.ACCEL_PER_S * dt);
     this.gameTimeMs += dt * 1000;
 
     // 2. world advance
@@ -626,7 +691,7 @@ export class RunnerEngine implements GameEngine {
     const speedT = clamp01(this.distance / len);
     this.speed = COURSE.SPEED_START + (COURSE.SPEED_END - COURSE.SPEED_START) * speedT;
     const prevDistance = this.distance;
-    this.distance += this.speed * dt;
+    this.distance += this.speed * this.speedFactor * dt;
 
     // 3. resolve obstacles whose action plane was crossed this frame
     for (let i = 0; i < this.obstacles.length; i++) {
@@ -870,6 +935,7 @@ export class RunnerEngine implements GameEngine {
     }
 
     this.updateDriftGuard(landmarks, drop, now);
+    this.updateLocomotion(landmarks, now);
     this.advanceJumpArc(now, dt);
 
     // slow-adapting standing baseline: only while everything is neutral
@@ -890,6 +956,145 @@ export class RunnerEngine implements GameEngine {
    */
   private liveScale(_landmarks: NormalizedLandmark[]): number {
     return Math.max(0.05, this.shoulderW0);
+  }
+
+  // ── locomotion: march/jog in place (pose mode) ────────────────────────
+
+  /**
+   * Primary signal = rhythmic small-amplitude vertical bounce of the
+   * shoulder-mid, normalized by the calibrated torso length. The upper body
+   * is ALWAYS in frame (legs often aren't on laptop setups), so this works
+   * regardless of framing. Secondary confirmation = alternating knee lifts
+   * when the legs are visible. Large excursions (jump/squat) are excluded
+   * and momentum carries locomotion THROUGH those actions so a jump never
+   * stalls the runner.
+   */
+  private updateLocomotion(landmarks: NormalizedLandmark[], now: number): void {
+    if (this.torsoLen0 <= 0) return;
+    const ls = landmarks[LM.LEFT_SHOULDER];
+    const rs = landmarks[LM.RIGHT_SHOULDER];
+    if (!ls || !rs || ls.visibility < 0.4 || rs.visibility < 0.4) {
+      this.updateLocomotionActive(now, false);
+      return;
+    }
+    const sMidY = (ls.y + rs.y) / 2;
+    if (!this.locoBaselineReady) {
+      this.locoBaseline = sMidY;
+      this.locoBaselineReady = true;
+    }
+    // the jump/squat FSMs own big excursions; suspend step detection there
+    // (momentum keeps locomotion alive — see updateLocomotionActive)
+    const fsmActive = this.jumpStartTs !== 0 || this.crouch > 0.25;
+
+    // detrended bounce in torso units (+ = above neutral)
+    const osc = (this.locoBaseline - sMidY) / this.torsoLen0;
+
+    // neutral line adapts only in calm, small-excursion moments
+    if (!fsmActive && Math.abs(osc) < LOCO.MAX_AMP) {
+      this.locoBaseline += LOCO.BASELINE_ALPHA * (sMidY - this.locoBaseline);
+    }
+
+    if (!fsmActive && Math.abs(osc) <= LOCO.MAX_AMP) {
+      const sign = osc > LOCO.MIN_AMP ? 1 : osc < -LOCO.MIN_AMP ? -1 : 0;
+      if (sign !== 0 && sign !== this.locoPrevSign) {
+        if (this.locoPrevSign !== 0) this.registerStepEvent(now);
+        this.locoPrevSign = sign;
+      }
+      // knee-lift confirmation (earlier/stronger when legs are in frame)
+      this.updateKneeLift(landmarks, now);
+    }
+
+    this.updateLocomotionActive(now, fsmActive);
+  }
+
+  /** Alternating knee raises feed the same step stream as the bounce. */
+  private updateKneeLift(landmarks: NormalizedLandmark[], now: number): void {
+    const lk = landmarks[LM.LEFT_KNEE];
+    const rk = landmarks[LM.RIGHT_KNEE];
+    if (!lk || !rk || lk.visibility < 0.5 || rk.visibility < 0.5) return;
+    if (!this.kneeBaseReady) {
+      this.kneeBaseL = lk.y;
+      this.kneeBaseR = rk.y;
+      this.kneeBaseReady = true;
+      return;
+    }
+    this.kneeBaseL += LOCO.BASELINE_ALPHA * (lk.y - this.kneeBaseL);
+    this.kneeBaseR += LOCO.BASELINE_ALPHA * (rk.y - this.kneeBaseR);
+    const liftL = (this.kneeBaseL - lk.y) / this.torsoLen0 > LOCO.KNEE_LIFT;
+    const liftR = (this.kneeBaseR - rk.y) / this.torsoLen0 > LOCO.KNEE_LIFT;
+    if (liftL && !this.kneeLiftedL && this.lastKneeLeg !== 'L') {
+      this.lastKneeLeg = 'L';
+      this.registerStepEvent(now);
+    }
+    if (liftR && !this.kneeLiftedR && this.lastKneeLeg !== 'R') {
+      this.lastKneeLeg = 'R';
+      this.registerStepEvent(now);
+    }
+    this.kneeLiftedL = liftL;
+    this.kneeLiftedR = liftR;
+  }
+
+  /** A qualifying rhythm event: validates cadence, drives start + momentum. */
+  private registerStepEvent(now: number): void {
+    const last = this.locoCrossTimes[this.locoCrossTimes.length - 1];
+    const gap = last !== undefined ? now - last : Infinity;
+    if (gap < LOCO.CROSS_MIN_MS) return; // jitter — too fast to be a step
+    if (gap > LOCO.CROSS_MAX_MS) {
+      // rhythm broken — restart the cadence window
+      this.locoCrossTimes = [now];
+      return;
+    }
+    this.locoCrossTimes.push(now);
+    if (this.locoCrossTimes.length > 8) this.locoCrossTimes.shift();
+    this.lastStepTs = now;
+    this.stepPhase += Math.PI;
+    if (!this.locoStarted) {
+      const inWindow = this.locoCrossTimes.filter((t) => now - t <= LOCO.START_WINDOW_MS);
+      if (inWindow.length >= LOCO.START_CROSSINGS) {
+        this.locoStarted = true;
+        this.emit('LOCO_START', {});
+      }
+    }
+  }
+
+  /** Momentum + decay: active while stepping recently OR mid-jump/squat. */
+  private updateLocomotionActive(now: number, fsmActive: boolean): void {
+    if (!this.locomotionGating) return; // inert unless the layer enabled gating
+    const wasActive = this.locomotionActive;
+    if (!this.locoStarted) {
+      this.locomotionActive = false;
+    } else if (fsmActive) {
+      // a jump/squat is not "stopping" — momentum carries through the action
+      this.lastStepTs = Math.max(this.lastStepTs, now - LOCO.STEP_TIMEOUT_MS / 2);
+      this.locomotionActive = true;
+    } else {
+      this.locomotionActive = now - this.lastStepTs <= LOCO.STEP_TIMEOUT_MS;
+      if (!this.locomotionActive) {
+        // fully stopped: require a fresh debounced start to move again
+        this.locoStarted = false;
+        this.locoCrossTimes = [];
+      }
+    }
+    if (wasActive !== this.locomotionActive) {
+      this.emit(this.locomotionActive ? 'LOCO_ON' : 'LOCO_OFF', {
+        msSinceStep: this.lastStepTs > 0 ? Math.round(now - this.lastStepTs) : -1,
+      });
+    }
+  }
+
+  /** Layer-facing locomotion snapshot (hints + auto-pause UX). */
+  getLocomotionState(): {
+    gated: boolean;
+    started: boolean;
+    active: boolean;
+    msSinceStep: number;
+  } {
+    return {
+      gated: this.locomotionGating,
+      started: this.locoStarted,
+      active: this.locomotionActive,
+      msSinceStep: this.lastStepTs > 0 ? Math.max(0, this.lastTs - this.lastStepTs) : -1,
+    };
   }
 
   // ── detection: head / neck ROM ────────────────────────────────────────

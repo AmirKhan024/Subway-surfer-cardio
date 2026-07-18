@@ -107,6 +107,15 @@ export default function RunnerLayer({
   const pausedRef = useRef(false);
   /** frozen countdown remaining while paused during the 3-2-1 */
   const pausedCountdownRemainingRef = useRef(0);
+  /** locomotion snapshot (pose gating): drives hints + idle auto-pause */
+  const [loco, setLoco] = useState<{
+    gated: boolean;
+    started: boolean;
+    active: boolean;
+    msSinceStep: number;
+  } | null>(null);
+  /** the user has marched at least once this run (onboarding vs stopped hint) */
+  const everStartedRef = useRef(false);
 
   const toggleMute = useCallback(() => {
     const next = !audioManager.isMuted();
@@ -208,6 +217,9 @@ export default function RunnerLayer({
     engine.setDebug(debug);
     engine.setBobScale(bobScale);
     engine.setSessionMs(sessionSec * 1000);
+    // march/jog-to-move applies to body control only; head mode (seated) and
+    // the keyboard test path keep auto-advance
+    engine.setLocomotionGating(controlMode === 'pose');
     engineRef.current = engine;
     let scene: RunnerScene;
     try {
@@ -316,6 +328,19 @@ export default function RunnerLayer({
         }
         setTracking(trackingNow);
         setDrifting(engine.getDriftState().drifting);
+        const ls = engine.getLocomotionState();
+        if (ls.started) everStartedRef.current = true;
+        setLoco(ls);
+        // long idle: never leave the game sitting dead — open the pause menu
+        if (
+          ls.gated &&
+          everStartedRef.current &&
+          !ls.active &&
+          ls.msSinceStep > 15_000 &&
+          !pausedRef.current
+        ) {
+          openPause();
+        }
       }
 
       raf = requestAnimationFrame(loop);
@@ -418,6 +443,31 @@ export default function RunnerLayer({
           </div>
         </div>
       )}
+
+      {/* locomotion hints (pose gating): onboarding for the new mechanic,
+          then a soft pulsing nudge when the user rests */}
+      {loco?.gated && uiPhase === 'playing' && !pauseMenu && !everStartedRef.current && (
+        <div className="pointer-events-none absolute inset-x-4 top-1/3 z-30 flex justify-center">
+          <div className="rounded-2xl border border-cyan-400/40 bg-slate-950/80 px-6 py-4 text-center backdrop-blur-md motion-safe:animate-pulse">
+            <div className="font-heading text-xl font-bold text-cyan-200">
+              🏃 Jog or march in place to start running!
+            </div>
+            <div className="mt-1 text-sm text-slate-300">The world moves when you do.</div>
+          </div>
+        </div>
+      )}
+      {loco?.gated &&
+        uiPhase === 'playing' &&
+        !pauseMenu &&
+        everStartedRef.current &&
+        !loco.active &&
+        loco.msSinceStep > 4500 && (
+          <div className="pointer-events-none absolute inset-x-4 top-1/3 z-30 flex justify-center">
+            <div className="rounded-xl border border-white/15 bg-slate-950/80 px-5 py-2.5 text-center text-sm font-semibold text-slate-200 backdrop-blur-md motion-safe:animate-pulse">
+              March in place to move
+            </div>
+          </div>
+        )}
 
       {/* NOTE: the in-play camera PiP was removed (mobile UX) — the tracking
           safeguard survives as this text-only toast */}

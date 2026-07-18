@@ -102,6 +102,34 @@ export const DRIFT = {
   SUSTAIN_MS: 2000,
 } as const;
 
+// ── Locomotion (march/jog in place — pose mode only) ─────────────────────
+// Every threshold is normalized by the calibrated torso length (shoulder-mid
+// → hip-mid), NEVER raw pixels/frame units — that's what keeps detection
+// identical across screen sizes, camera distances, and resolutions.
+export const LOCO = {
+  /** min normalized bounce amplitude (torso units) that reads as a step */
+  MIN_AMP: 0.015,
+  /** excursions beyond this are jump/squat territory — never steps */
+  MAX_AMP: 0.22,
+  /** valid gap between qualifying direction-changes (ms) ≈ 0.8–3.5 Hz */
+  CROSS_MIN_MS: 140,
+  CROSS_MAX_MS: 650,
+  /** rhythmic crossings needed inside START_WINDOW_MS to debounce the start */
+  START_CROSSINGS: 4,
+  START_WINDOW_MS: 2200,
+  /** momentum: locomotion stays active this long after the last step */
+  STEP_TIMEOUT_MS: 1200,
+  /** slow EMA for the neutral line the bounce is measured against */
+  BASELINE_ALPHA: 0.06,
+  /** knee-lift confirmation (legs in frame): lift height in torso units */
+  KNEE_LIFT: 0.12,
+  /** smooth-stop/start rates for the world speed factor (fraction per s) */
+  ACCEL_PER_S: 2.5,
+  DECEL_PER_S: 1.8,
+  /** never coast closer than this to an unresolved obstacle plane (m) */
+  STOP_MARGIN_M: 0.6,
+} as const;
+
 // ── Course / world ───────────────────────────────────────────────────────
 export const COURSE = {
   OBSTACLES: 20,
