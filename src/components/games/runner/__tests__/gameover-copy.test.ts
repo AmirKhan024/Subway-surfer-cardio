@@ -4,7 +4,7 @@ import { gameOverCopy, reportHeading } from '../gameover-copy';
 describe('gameOverCopy — driven by RUN_DONE reason, never by lives', () => {
   it("timer expiry is an achievement — never 'Out of lives'", () => {
     const c = gameOverCopy('time');
-    expect(c.title).toBe("Time's up!");
+    expect(c.title).toBe('Great session!');
     expect(c.tone).toBe('win');
     expect(c.title).not.toContain('Out of lives');
   });

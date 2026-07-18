@@ -25,7 +25,7 @@ export function gameOverCopy(reason: EndReason): GameOverCopy {
     default:
       // timer expiry is an ACHIEVEMENT, not a loss — and the safe default
       return {
-        title: "Time's up!",
+        title: 'Great session!',
         sub: 'You went the full session — great work!',
         tone: 'win',
       };

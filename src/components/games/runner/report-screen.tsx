@@ -130,8 +130,6 @@ export default function ReportScreen({
   debug?: boolean;
 }) {
   const [score, setScore] = useState<KR1ScoreResult | null>(null);
-  const [deltaMusculage, setDeltaMusculage] = useState<number | null>(null);
-  const [personalBest, setPersonalBest] = useState(false);
   const [reducedMotion] = useState(
     () =>
       typeof window !== 'undefined' &&
@@ -141,20 +139,15 @@ export default function ReportScreen({
   useEffect(() => {
     const s = computeKR1Score(raw, age);
     setScore(s);
-    const prevRuns = pushHistory({
+    // local history only — kept as data for a future backend, never compared
+    // in the UI (per-device localStorage would mislead across devices)
+    pushHistory({
       musculage: s.musculage,
       conditioned: s.conditioned,
       cleared: raw.obstaclesCleared,
       seed: raw.seed,
       at: Date.now(),
     });
-    if (prevRuns.length > 0) {
-      const last = prevRuns[prevRuns.length - 1];
-      setDeltaMusculage(s.musculage - last.musculage);
-      setPersonalBest(s.musculage < Math.min(...prevRuns.map((r) => r.musculage)));
-    } else {
-      setPersonalBest(!s.incomplete);
-    }
     // score once per mount — raw/age are stable for a given report
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -204,23 +197,8 @@ export default function ReportScreen({
             <div className="mt-2 text-center text-sm text-slate-400">
               Score {conditionedPct} · You are {age}
             </div>
-            <div className="mt-2 flex items-center justify-center gap-2 text-xs">
-              {personalBest && (
-                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-300">
-                  ★ Personal best
-                </span>
-              )}
-              {deltaMusculage !== null && deltaMusculage !== 0 && (
-                <span
-                  className={`rounded-full px-2 py-0.5 font-semibold ${
-                    deltaMusculage < 0
-                      ? 'bg-emerald-500/15 text-emerald-300'
-                      : 'bg-rose-500/15 text-rose-300'
-                  }`}
-                >
-                  {deltaMusculage < 0 ? '▼' : '▲'} {Math.abs(deltaMusculage)} vs last run
-                </span>
-              )}
+            <div className="mt-1 text-center text-[11px] text-slate-500">
+              Fuller ring = muscles younger than your age
             </div>
             <AgeBar age={age} musculage={score.musculage} better={better} />
           </div>
@@ -249,7 +227,7 @@ export default function ReportScreen({
             sub="How fast you moved after the cue."
           />
           <Stat label="Time" value={`${(raw.elapsed / 1000).toFixed(0)}s`} />
-          <Stat label="Coins" value={`◉ ${raw.coinsCollected}`} sub="fun only" />
+          <Stat label="Coins" value={`◉ ${raw.coinsCollected}`} />
         </div>
 
         {raw.assessmentValid === 0 && !score.incomplete && (
