@@ -134,6 +134,11 @@ export default function RunnerLayer({
   } | null>(null);
   /** the user has marched at least once this run (onboarding vs stopped hint) */
   const everStartedRef = useRef(false);
+  /** frame-time stats over rolling 5s windows → klog('FRAME_STATS') — the
+   *  smoothness evidence channel (lands in the copied diagnostics blob) */
+  const frameStatsRef = useRef({ windowStart: 0, lastT: 0, frames: 0, sumMs: 0, worstMs: 0, drops: 0 });
+  const fpsReadoutRef = useRef<HTMLDivElement>(null);
+  const lastFpsDrawRef = useRef(0);
   /** screen-space juice timestamps (keyed CSS animations; 0 = never fired) */
   const [fxJump, setFxJump] = useState(0);
   const [fxDust, setFxDust] = useState(0);
@@ -270,6 +275,38 @@ export default function RunnerLayer({
     const loop = () => {
       const now = performance.now();
       const lms = latestLandmarksRef.current ?? [];
+
+      // frame-time telemetry (cheap: a few adds per frame, one klog per 5s)
+      const fs = frameStatsRef.current;
+      if (fs.lastT > 0) {
+        const gap = now - fs.lastT;
+        fs.frames += 1;
+        fs.sumMs += gap;
+        if (gap > fs.worstMs) fs.worstMs = gap;
+        if (gap > 25) fs.drops += 1;
+        if (now - fs.windowStart >= 5000 && fs.frames > 0) {
+          const avgMs = fs.sumMs / fs.frames;
+          klog('FRAME_STATS', {
+            avgMs: Math.round(avgMs * 10) / 10,
+            worstMs: Math.round(fs.worstMs),
+            drops: fs.drops,
+            fps: Math.round(1000 / avgMs),
+          });
+          fs.windowStart = now;
+          fs.frames = 0;
+          fs.sumMs = 0;
+          fs.worstMs = 0;
+          fs.drops = 0;
+        }
+        if (debug && now - lastFpsDrawRef.current > 500 && fpsReadoutRef.current && fs.frames > 0) {
+          lastFpsDrawRef.current = now;
+          const avg = fs.sumMs / fs.frames;
+          fpsReadoutRef.current.textContent = `${(1000 / avg).toFixed(0)}fps · avg ${avg.toFixed(1)}ms · worst ${fs.worstMs.toFixed(0)}ms · drops ${fs.drops}`;
+        }
+      } else {
+        fs.windowStart = now;
+      }
+      fs.lastT = now;
 
       switch (phaseRef.current) {
         case 'calibrating': {
@@ -438,6 +475,14 @@ export default function RunnerLayer({
       <video ref={videoRef} playsInline muted className="hidden" />
 
       {hud && uiPhase === 'playing' && <RunnerHUD hud={hud} />}
+
+      {/* live frame-time readout (?debug=1 only; ref-written at 2Hz) */}
+      {debug && (
+        <div
+          ref={fpsReadoutRef}
+          className="pointer-events-none absolute bottom-24 left-3 z-30 rounded bg-slate-950/70 px-2 py-1 font-mono text-[11px] text-emerald-300"
+        />
+      )}
 
       {/* screen-space juice — keyed so each event restarts its animation;
           UNMOUNTED on animation end (no lingering compositor layers — the

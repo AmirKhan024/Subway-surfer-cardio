@@ -42,6 +42,18 @@ export class RunnerScene {
   private playerShadow!: THREE.Mesh;
   private lastFov = 0;
   private disposed = false;
+  /** visual-scroll follower: a velocity-clamped smoothed distance. Legit
+   *  motion passes 1:1 (zero standing lag; hitstop/freezes stay crisp);
+   *  only super-speed excess — a single-frame lurch after a main-thread
+   *  hitch — bleeds out over ~100ms instead of jumping the world. */
+  private smoothD = 0;
+  private lastNowMs = 0;
+  /** smoothed visual velocity (m/s) derived from smoothD — the ONE signal
+   *  layer-side speed fx must read (raw engine distance would strobe on
+   *  exactly the frames this follower masks) */
+  private visualVel = 0;
+  private static readonly SNAP_M = 2;
+  private static readonly FOLLOW_RATE = 12;
 
   constructor(canvas: HTMLCanvasElement) {
     const w = canvas.clientWidth || window.innerWidth;
@@ -198,7 +210,29 @@ export class RunnerScene {
 
   update(state: RunnerSceneState, nowMs: number): void {
     if (this.disposed) return;
-    const d = state.distance;
+
+    // visual-scroll follower (see field comment): pass legitimate per-frame
+    // motion 1:1, smooth only the super-speed excess of a frame hitch
+    const dtS =
+      this.lastNowMs === 0 ? 0 : Math.min(0.1, Math.max(0, (nowMs - this.lastNowMs) / 1000));
+    this.lastNowMs = nowMs;
+    const prevSmoothD = this.smoothD;
+    const step = state.distance - this.smoothD;
+    if (dtS === 0 || step < 0 || step > RunnerScene.SNAP_M) {
+      this.smoothD = state.distance; // first frame / restart / teleport
+      this.visualVel = 0;
+    } else {
+      // clamp dt so the hitch frame itself counts as a lurch to be smoothed
+      const allowed = state.speed * 1.25 * Math.min(dtS, 1 / 30);
+      this.smoothD +=
+        step <= allowed
+          ? step
+          : allowed + (step - allowed) * Math.min(1, dtS * RunnerScene.FOLLOW_RATE);
+      const instVel = dtS > 0 ? (this.smoothD - prevSmoothD) / dtS : 0;
+      this.visualVel += (instVel - this.visualVel) * 0.2;
+    }
+    const d = this.smoothD;
+    const lagOffset = state.distance - this.smoothD;
 
     // road scroll
     this.roadTex.offset.y = (d / LOOP_LEN) * 24;
@@ -216,9 +250,9 @@ export class RunnerScene {
       this.clouds[i].position.x += Math.sin(nowMs / 9000 + i) * 0.005;
     }
 
-    // obstacles + coins
-    this.syncObstacles(state.obstacles);
-    this.syncCoins(state.coins, nowMs);
+    // obstacles + coins (positioned on the smoothed scroll via lagOffset)
+    this.syncObstacles(state.obstacles, lagOffset);
+    this.syncCoins(state.coins, nowMs, lagOffset);
 
     // camera from engine outputs (never recomputed here)
     this.camera.position.y = state.cameraY;
@@ -244,7 +278,13 @@ export class RunnerScene {
     this.renderer.render(this.scene, this.camera);
   }
 
-  private syncObstacles(obstacles: SceneObstacle[]): void {
+  /** Smoothed visual velocity (m/s) — same signal as the scroll follower;
+   *  the layer's speed-fx intensity MUST use this, never raw distance. */
+  getVisualVelocity(): number {
+    return this.visualVel;
+  }
+
+  private syncObstacles(obstacles: SceneObstacle[], lagOffset: number): void {
     for (const ob of obstacles) {
       const visible = ob.zAhead > -5 && ob.zAhead < FOG_FAR && !ob.resolved;
       let mesh = this.obstacleMeshes.get(ob.id);
@@ -259,13 +299,13 @@ export class RunnerScene {
           this.obstacleMeshes.delete(ob.id);
           disposeObject(mesh);
         } else {
-          mesh.position.z = -ob.zAhead;
+          mesh.position.z = -(ob.zAhead + lagOffset);
         }
       }
     }
   }
 
-  private syncCoins(coins: SceneCoin[], nowMs: number): void {
+  private syncCoins(coins: SceneCoin[], nowMs: number, lagOffset: number): void {
     for (const coin of coins) {
       const inView = coin.zAhead > -5 && coin.zAhead < FOG_FAR;
       const popping = this.coinPops.has(coin.id);
@@ -293,7 +333,7 @@ export class RunnerScene {
         continue;
       }
 
-      mesh.position.z = -coin.zAhead;
+      mesh.position.z = -(coin.zAhead + lagOffset);
       mesh.position.y = coin.aerial ? 1.7 : 0.8;
       mesh.rotation.y = (nowMs / 1000) * COIN.SPIN_RAD_S;
 
