@@ -372,10 +372,13 @@ function makeRoadTexture(): THREE.CanvasTexture {
   const g = c.getContext('2d')!;
   g.fillStyle = '#3f4652';
   g.fillRect(0, 0, 128, 256);
-  // edge lines
+  // edge rumble strips — DASHED so the edges scroll visibly (solid lines
+  // read as static; the dashes are most of the ground-speed sensation)
   g.fillStyle = '#e8eaee';
-  g.fillRect(6, 0, 4, 256);
-  g.fillRect(118, 0, 4, 256);
+  for (let y = 0; y < 256; y += 16) {
+    g.fillRect(6, y, 4, 9);
+    g.fillRect(118, y, 4, 9);
+  }
   // center dashes
   g.fillStyle = '#ffd34d';
   for (let y = 0; y < 256; y += 64) g.fillRect(61, y, 6, 34);

@@ -391,6 +391,7 @@ export class RunnerEngine implements GameEngine {
     this.hitstopUntilMs = 0;
     this.shakeAmp = 0;
     this.shakeT = 0;
+    this.jogSwayX = 0;
 
     if (this.controlMode === 'keyboard') {
       // No camera baseline needed — keyboard is instantly "calibrated".
@@ -1550,6 +1551,9 @@ export class RunnerEngine implements GameEngine {
   /** landing screen-shake envelope (m) + oscillator clock (s) */
   private shakeAmp = 0;
   private shakeT = 0;
+  /** horizontal jog sway (m) — figure-8 half of the head-bob. EXACT 0 when
+   *  not marching so keyboard/head shakeX stays float-identical 0. */
+  private jogSwayX = 0;
 
   private updateCameraFeel(dt: number): void {
     // landing impact: damped spring = quick dip + tiny overshoot-and-settle
@@ -1571,6 +1575,11 @@ export class RunnerEngine implements GameEngine {
     if (this.locomotionGating && this.locomotionActive) {
       this.jogBobT += dt * 2 * Math.PI * JUICE.JOG_BOB_HZ;
       jogBob = JUICE.JOG_BOB_M * Math.sin(this.jogBobT) * this.speedFactor;
+      // figure-8: lateral weight shift at half the footfall rate
+      this.jogSwayX =
+        JUICE.JOG_SWAY_M * Math.sin(this.jogBobT / 2) * this.speedFactor * this.bobScale;
+    } else {
+      this.jogSwayX = 0;
     }
     // camera rise from the jump arc — with a pose-only anticipation beat:
     // the first ~70ms loads a small crouch-dip and delays the rise, so the
@@ -1609,9 +1618,11 @@ export class RunnerEngine implements GameEngine {
     this.fovPunch = Math.max(0, this.fovPunch - this.fovPunch * JUICE.FOV_PUNCH_DECAY * dt);
     const speedNorm =
       (this.speed - COURSE.SPEED_START) / (COURSE.SPEED_END - COURSE.SPEED_START);
+    // speed FOV breathes with the run: × speedFactor eases it back to base
+    // when the runner stops (keyboard/head speedFactor is always 1)
     this.fov =
       CAMERA.FOV_BASE +
-      CAMERA.FOV_SPEED_GAIN * clamp01(speedNorm) +
+      CAMERA.FOV_SPEED_GAIN * clamp01(speedNorm) * this.speedFactor +
       this.fovPunch * (this.bobScale > 0 ? 1 : 0);
   }
 
@@ -1660,7 +1671,8 @@ export class RunnerEngine implements GameEngine {
       lowImpact: this.lowImpact,
       crouch: this.crouch,
       jumpY: this.jumpY(),
-      shakeX: this.shakeAmp * Math.sin(this.shakeT * 2 * Math.PI * JUICE.SHAKE_HZ),
+      shakeX:
+        this.shakeAmp * Math.sin(this.shakeT * 2 * Math.PI * JUICE.SHAKE_HZ) + this.jogSwayX,
     };
   }
 

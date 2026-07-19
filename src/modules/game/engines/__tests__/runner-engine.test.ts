@@ -1847,3 +1847,52 @@ describe('RunnerEngine — head-mode camera feedback (look tilt)', () => {
     expect(Math.abs(engine.getSceneState().cameraPitch)).toBeLessThan(1e-4);
   });
 });
+
+// ── alive round: figure-8 jog sway + speed-FOV parity ──────────────────────
+describe('RunnerEngine — jog sway + speed FOV', () => {
+  function gatedEngine(): { engine: RunnerEngine; t: number } {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    const t = calibrate(engine);
+    engine.setLocomotionGating(true);
+    engine.startPlaying();
+    return { engine, t };
+  }
+
+  it('marching produces lateral jog sway in shakeX; stopping zeroes it EXACTLY', () => {
+    const { engine, t: t0 } = gatedEngine();
+    let t = t0;
+    let maxSway = 0;
+    for (let i = 0; i < 90; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6 + 0.012 * Math.sin((2 * Math.PI * i) / 12) }), t);
+      maxSway = Math.max(maxSway, Math.abs(engine.getSceneState().shakeX));
+    }
+    expect(maxSway).toBeGreaterThan(0.001); // figure-8 sway alive while marching
+    expect(maxSway).toBeLessThanOrEqual(JUICE.JOG_SWAY_M + 1e-9);
+
+    for (let i = 0; i < 120; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6 }), t);
+    }
+    expect(engine.getSceneState().shakeX).toBe(0); // exact literal zero at rest
+  });
+
+  it('keyboard fov is exactly base + speed gain (speedFactor ×1 identity — parity lock)', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    for (let i = 0; i < 60; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      const s = engine.getSceneState();
+      const speedNorm = Math.min(
+        1,
+        Math.max(0, (s.speed - COURSE.SPEED_START) / (COURSE.SPEED_END - COURSE.SPEED_START)),
+      );
+      expect(Math.abs(s.fov - (CAMERA.FOV_BASE + CAMERA.FOV_SPEED_GAIN * speedNorm))).toBeLessThan(
+        1e-9,
+      );
+      expect(s.shakeX).toBe(0);
+    }
+  });
+});

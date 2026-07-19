@@ -160,9 +160,11 @@ export const JUICE = {
   FOV_PUNCH_JUMP: 5,
   FOV_PUNCH_LAND: 3,
   FOV_PUNCH_DECAY: 5,
-  /** jogging head-bob: amplitude (m) + fallback cadence (Hz) */
-  JOG_BOB_M: 0.02,
+  /** jogging head-bob: amplitude (m) + fallback cadence (Hz). The bob is a
+   *  figure-8: vertical at footfall rate + horizontal sway at half rate. */
+  JOG_BOB_M: 0.035,
   JOG_BOB_HZ: 2.2,
+  JOG_SWAY_M: 0.02,
   /** landing hitstop: world distance pauses this long on a pose landing
    *  (the single biggest "weight" read — tiny by design, never reads as lag) */
   HITSTOP_MS: 60,
