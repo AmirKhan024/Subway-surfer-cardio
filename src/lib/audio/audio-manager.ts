@@ -243,13 +243,14 @@ class AudioManager {
           this.blip(880, 0.16, 'sine', 0.2);
           break;
         case 'whoosh':
-          // beam whipping overhead: fast falling airy sweep, quiet
-          this.sweep(1400, 220, 0.22, 'triangle', 0.1);
+          // beam ripping overhead: fast falling airy sweep, punchy
+          this.sweep(1600, 180, 0.26, 'triangle', 0.16);
           break;
         case 'land':
-          // landing thud: low body hit + short falling knock
-          this.blip(150, 0.09, 'sine', 0.22);
-          this.sweep(220, 70, 0.12, 'triangle', 0.18);
+          // landing thud: low body hit + sub layer + short falling knock
+          this.blip(150, 0.09, 'sine', 0.26);
+          this.blip(90, 0.12, 'sine', 0.25);
+          this.sweep(220, 70, 0.12, 'triangle', 0.22);
           break;
       }
     } catch {

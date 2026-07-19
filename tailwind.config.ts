@@ -83,10 +83,11 @@ const config: Config = {
             transform: 'translate(var(--dx, 0px), var(--dy, -40px)) scale(0.5)',
           },
         },
+        // beam whoosh-over: dark band rips top→bottom across the screen
         fxStreak: {
-          '0%': { opacity: '0', transform: 'translateY(-60%)' },
-          '25%': { opacity: '0.8' },
-          '100%': { opacity: '0', transform: 'translateY(140%)' },
+          '0%': { opacity: '0', transform: 'translateY(-100%)' },
+          '15%': { opacity: '1' },
+          '100%': { opacity: '0', transform: 'translateY(320%)' },
         },
         // jump speed-edge: partial-screen side bars sweeping down — replaces
         // the old fullscreen repeating-conic-gradient (a fullscreen repaint)
@@ -117,8 +118,8 @@ const config: Config = {
         'slide-in': 'slideIn 0.3s ease-out',
         pulse: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'screen-in': 'screenIn 0.35s ease-out',
-        'fx-dust': 'fxDust 0.55s ease-out forwards',
-        'fx-streak': 'fxStreak 0.45s ease-in forwards',
+        'fx-dust': 'fxDust 0.45s ease-out forwards',
+        'fx-streak': 'fxStreak 0.28s ease-in forwards',
         'fx-edge': 'fxEdge 0.35s ease-out forwards',
         'fx-pulse': 'fxPulse 0.4s ease-out forwards',
         'cue-pop': 'cuePop 0.2s ease-out',

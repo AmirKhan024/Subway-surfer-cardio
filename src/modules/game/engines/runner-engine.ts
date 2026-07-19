@@ -392,6 +392,8 @@ export class RunnerEngine implements GameEngine {
     this.shakeAmp = 0;
     this.shakeT = 0;
     this.jogSwayX = 0;
+    this.duckSpringT = -1;
+    this.duckDeep = false;
 
     if (this.controlMode === 'keyboard') {
       // No camera baseline needed — keyboard is instantly "calibrated".
@@ -1554,6 +1556,10 @@ export class RunnerEngine implements GameEngine {
   /** horizontal jog sway (m) — figure-8 half of the head-bob. EXACT 0 when
    *  not marching so keyboard/head shakeX stays float-identical 0. */
   private jogSwayX = 0;
+  /** duck-release overshoot spring clock, -1 = inactive (pose only) */
+  private duckSpringT = -1;
+  /** the current crouch episode got deep enough to earn a release spring */
+  private duckDeep = false;
 
   private updateCameraFeel(dt: number): void {
     // landing impact: damped spring = quick dip + tiny overshoot-and-settle
@@ -1594,11 +1600,38 @@ export class RunnerEngine implements GameEngine {
           JUICE.JUMP_DIP_M * Math.sin((Math.PI * tj) / JUICE.JUMP_DIP_S);
       }
     }
+    // duck-release overshoot (pose only): standing back up springs slightly
+    // past eye height then settles — ducking has weight, not just a dip
+    let duckOffset = 0;
+    if (this.controlMode === 'pose') {
+      if (this.crouch > 0.5) this.duckDeep = true;
+      else if (this.duckDeep && this.crouch < 0.15) {
+        this.duckDeep = false;
+        this.duckSpringT = 0;
+      }
+      if (this.duckSpringT >= 0) {
+        this.duckSpringT += dt;
+        if (this.duckSpringT >= JUICE.DUCK_OVER_DURATION_S) {
+          this.duckSpringT = -1;
+        } else {
+          duckOffset =
+            JUICE.DUCK_OVER_M *
+            Math.exp(-JUICE.DUCK_OVER_DAMP * this.duckSpringT) *
+            Math.sin(2 * Math.PI * JUICE.DUCK_OVER_HZ * this.duckSpringT);
+        }
+      }
+    }
     const targetY =
       CAMERA.EYE +
-      this.bobScale * (-CAMERA.CROUCH_DIP * this.crouch + rise + landOffset + jogBob);
+      this.bobScale * (-CAMERA.CROUCH_DIP * this.crouch + rise + landOffset + jogBob + duckOffset);
     const a = Math.min(1, dt * CAMERA.DAMP);
-    this.cameraY += (targetY - this.cameraY) * a;
+    // pose descent is snappier than recovery (framerate-safe exp form) —
+    // the duck should drop fast and spring back, not glide both ways
+    const aY =
+      this.controlMode === 'pose' && targetY < this.cameraY
+        ? 1 - Math.exp(-CAMERA.DAMP * JUICE.DUCK_DAMP_MULT * dt)
+        : a;
+    this.cameraY += (targetY - this.cameraY) * aY;
     let targetPitch = CAMERA.PITCH_CROUCH * this.crouch * this.bobScale;
     if (this.controlMode === 'head') {
       // neck mode's own feedback: look-up tilts the camera up (flexion
@@ -1619,10 +1652,14 @@ export class RunnerEngine implements GameEngine {
     const speedNorm =
       (this.speed - COURSE.SPEED_START) / (COURSE.SPEED_END - COURSE.SPEED_START);
     // speed FOV breathes with the run: × speedFactor eases it back to base
-    // when the runner stops (keyboard/head speedFactor is always 1)
+    // when the runner stops (keyboard/head speedFactor is always 1).
+    // Pose ducks also widen the lens — "compressed under the beam".
+    const crouchFov =
+      this.controlMode === 'pose' ? JUICE.CROUCH_FOV * this.crouch * this.bobScale : 0;
     this.fov =
       CAMERA.FOV_BASE +
       CAMERA.FOV_SPEED_GAIN * clamp01(speedNorm) * this.speedFactor +
+      crouchFov +
       this.fovPunch * (this.bobScale > 0 ? 1 : 0);
   }
 

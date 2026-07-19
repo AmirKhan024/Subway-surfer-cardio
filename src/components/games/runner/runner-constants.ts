@@ -169,13 +169,25 @@ export const JUICE = {
    *  (the single biggest "weight" read — tiny by design, never reads as lag) */
   HITSTOP_MS: 60,
   /** landing screen shake: amplitude (m), oscillation Hz, exp decay (per s) —
-   *  X-only and subtle: FPP shake is a nausea risk */
-  SHAKE_M: 0.02,
-  SHAKE_HZ: 12,
-  SHAKE_DECAY: 9,
+   *  X-only and subtle: FPP shake is a nausea risk. HZ stays ≤14 so the
+   *  33ms-sampled decay test keeps a healthy peak margin (Nyquist). */
+  SHAKE_M: 0.03,
+  SHAKE_HZ: 14,
+  SHAKE_DECAY: 11,
   /** jump anticipation: pre-rise crouch-load dip depth (m) + duration (s) */
   JUMP_DIP_M: 0.03,
   JUMP_DIP_S: 0.07,
+  /** duck feel (pose only): descent speed multiplier on the camera damp,
+   *  release-overshoot spring (m / Hz / exp damp / lifetime), and the FOV
+   *  widen (deg at full crouch) for the "compressed under it" read */
+  DUCK_DAMP_MULT: 1.8,
+  /** slow-ish spring: its peak (~110ms) must land AFTER the camera has
+   *  climbed back from the dip, or the overshoot decays before it shows */
+  DUCK_OVER_M: 0.04,
+  DUCK_OVER_HZ: 2.2,
+  DUCK_OVER_DAMP: 4,
+  DUCK_OVER_DURATION_S: 0.8,
+  CROUCH_FOV: 4,
 } as const;
 
 // ── Course / world ───────────────────────────────────────────────────────

@@ -1896,3 +1896,66 @@ describe('RunnerEngine — jog sway + speed FOV', () => {
     }
   });
 });
+
+// ── duck feel: release overshoot is pose-only camera juice ────────────────
+describe('RunnerEngine — duck-release overshoot', () => {
+  it('standing up from a deep pose crouch springs the camera past eye height', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    let t = calibrate(engine);
+    engine.startPlaying();
+    // settle, crouch deep (~hip drop 0.08 raw ⇒ crouch ≈ 1), hold, release
+    for (const hipY of [
+      ...Array(15).fill(0.6),
+      ...ramp(0.6, 0.68, 5),
+      ...Array(20).fill(0.68),
+    ]) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY }), t);
+    }
+    expect(engine.getSceneState().cameraY).toBeLessThan(CAMERA.EYE - 0.3); // deep dip
+    let maxY = 0;
+    for (const hipY of [...ramp(0.68, 0.6, 5), ...Array(30).fill(0.6)]) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY }), t);
+      maxY = Math.max(maxY, engine.getSceneState().cameraY);
+    }
+    expect(maxY).toBeGreaterThan(CAMERA.EYE + 0.008); // overshoot beat
+  });
+
+  it('keyboard recovery never overshoots (byte-identical guard)', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.startPlaying();
+    let t = 1000;
+    engine.setControlInput({ crouchHeld: true });
+    for (let i = 0; i < 30; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    engine.setControlInput({ crouchHeld: false });
+    let maxY = 0;
+    for (let i = 0; i < 40; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      maxY = Math.max(maxY, engine.getSceneState().cameraY);
+    }
+    expect(maxY).toBeLessThanOrEqual(CAMERA.EYE + 1e-9);
+  });
+
+  it('bobScale=0 removes the overshoot entirely', () => {
+    const engine = new RunnerEngine({ controlMode: 'pose', seed: 1337 });
+    engine.setBobScale(0);
+    let t = calibrate(engine);
+    engine.startPlaying();
+    for (const hipY of [...ramp(0.6, 0.68, 5), ...Array(20).fill(0.68), ...ramp(0.68, 0.6, 5)]) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY }), t);
+    }
+    let maxY = 0;
+    for (let i = 0; i < 40; i++) {
+      t += FRAME_MS;
+      engine.processFrame(makeFrame({ hipY: 0.6 }), t);
+      maxY = Math.max(maxY, engine.getSceneState().cameraY);
+    }
+    expect(maxY).toBeLessThanOrEqual(CAMERA.EYE + 1e-9);
+  });
+});

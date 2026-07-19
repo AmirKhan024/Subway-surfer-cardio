@@ -47,16 +47,16 @@ type UiPhase = 'booting' | 'calibrating' | 'countdown' | 'playing' | 'done';
 
 /** fixed dust-burst particle offsets (deterministic — no per-render random) */
 const DUST_PARTICLES = [
-  { dx: -90, dy: -40, size: 8 },
-  { dx: -60, dy: -66, size: 6 },
-  { dx: -34, dy: -48, size: 9 },
-  { dx: -12, dy: -72, size: 7 },
-  { dx: 10, dy: -58, size: 8 },
-  { dx: 34, dy: -75, size: 6 },
-  { dx: 58, dy: -50, size: 9 },
-  { dx: 88, dy: -36, size: 7 },
-  { dx: -22, dy: -30, size: 5 },
-  { dx: 24, dy: -28, size: 5 },
+  { dx: -104, dy: -46, size: 10 },
+  { dx: -70, dy: -76, size: 8 },
+  { dx: -40, dy: -56, size: 11 },
+  { dx: -14, dy: -85, size: 9 },
+  { dx: 12, dy: -66, size: 10 },
+  { dx: 40, dy: -85, size: 8 },
+  { dx: 68, dy: -58, size: 11 },
+  { dx: 102, dy: -42, size: 9 },
+  { dx: -26, dy: -34, size: 7 },
+  { dx: 28, dy: -32, size: 7 },
 ] as const;
 
 /** head-mode vignette pulse colors (gameplay signal colors) */
@@ -581,7 +581,7 @@ export default function RunnerLayer({
             {DUST_PARTICLES.map((p, i) => (
               <span
                 key={i}
-                className="absolute rounded-full bg-amber-100/60 animate-fx-dust [will-change:opacity,transform]"
+                className="absolute rounded-full bg-amber-100/75 animate-fx-dust [will-change:opacity,transform]"
                 style={{
                   width: p.size,
                   height: p.size,
@@ -593,11 +593,13 @@ export default function RunnerLayer({
           </div>
         </div>
       )}
+      {/* beam whoosh-over: a fast DARK band sweeps top→bottom as the beam
+          rips past overhead — the visceral half of clearing a duck */}
       {fxStreak > 0 && (
         <div
           key={`s${fxStreak}`}
           onAnimationEnd={() => setFxStreak(0)}
-          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-24 animate-fx-streak bg-gradient-to-b from-white/25 to-transparent [will-change:opacity,transform]"
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[35vh] animate-fx-streak bg-gradient-to-b from-slate-950/75 via-slate-900/45 to-transparent [will-change:opacity,transform]"
         />
       )}
 
