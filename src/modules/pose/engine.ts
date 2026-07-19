@@ -55,7 +55,12 @@ export class PoseEngine {
     this.callback = callback;
   }
 
-  detectForVideo(video: HTMLVideoElement, timestamp: number): PoseResult | null {
+  /**
+   * Accepts a video element (main thread) or an ImageBitmap (Web Worker —
+   * the worker has no DOM; the main thread grabs frames and transfers
+   * bitmaps in). MediaPipe's real detectForVideo takes either (ImageSource).
+   */
+  detectForVideo(video: HTMLVideoElement | ImageBitmap, timestamp: number): PoseResult | null {
     if (!this.landmarker || this._destroyed) return null;
 
     // Ensure strictly increasing timestamps
@@ -65,7 +70,7 @@ export class PoseEngine {
     this._lastTimestamp = timestamp;
 
     try {
-      const result = (this.landmarker as unknown as { detectForVideo: (video: HTMLVideoElement, timestamp: number) => unknown }).detectForVideo(video, timestamp);
+      const result = (this.landmarker as unknown as { detectForVideo: (video: HTMLVideoElement | ImageBitmap, timestamp: number) => unknown }).detectForVideo(video, timestamp);
       const detectionResult = result as unknown as { landmarks?: Array<Array<{ x: number; y: number; z: number; visibility?: number }>> };
 
       if (detectionResult.landmarks && detectionResult.landmarks.length > 0) {
