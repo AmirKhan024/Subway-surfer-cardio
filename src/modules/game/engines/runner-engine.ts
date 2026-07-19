@@ -182,6 +182,11 @@ export class RunnerEngine implements GameEngine {
   private squatState: FsmState = 'neutral';
   private squatPeak = 0;
   private jumpArmed = true;
+  /** anti-cheat: a beam clear CONSUMES the squat — the next beam needs a
+   *  fresh one (re-arms only when crouch returns to neutral). Holding a
+   *  squat forever cleared every beam with zero exercise. Mode-agnostic:
+   *  pose hips, head flexion and keyboard all drive the same crouch. */
+  private beamArmed = true;
   private jumpStartTs = 0; // 0 = not airborne
   private jumpMeasuredPeak = 0;
   /** last jump initiation (any mode) — drives the intent-based hurdle clear */
@@ -317,6 +322,7 @@ export class RunnerEngine implements GameEngine {
     this.squatState = 'neutral';
     this.squatPeak = 0;
     this.jumpArmed = true;
+    this.beamArmed = true;
     this.jumpStartTs = 0;
     this.jumpMeasuredPeak = 0;
     this.lastJumpTriggerTs = 0;
@@ -744,6 +750,10 @@ export class RunnerEngine implements GameEngine {
     const moveDt = timestampMs < this.hitstopUntilMs ? 0 : dt;
     this.distance += this.speed * this.speedFactor * moveDt;
 
+    // beam re-arm: standing back up (crouch fully released) earns the next
+    // beam clear — runs before the grace/crossing checks so both see it
+    if (!this.beamArmed && this.crouch <= 0.01) this.beamArmed = true;
+
     // 2b. resume grace: hold just short of the nearest unresolved plane
     // until the reaction window elapses — unless the player is already
     // performing the correct action, in which case release immediately so
@@ -757,7 +767,7 @@ export class RunnerEngine implements GameEngine {
           const ob = this.obstacles[i];
           const acted =
             ob.type === 'beam'
-              ? this.crouch > DETECT.SQUAT_CLEAR
+              ? this.beamArmed && this.crouch > DETECT.SQUAT_CLEAR
               : this.jumpStartTs !== 0 ||
                 (this.lastJumpTriggerTs > 0 &&
                   timestampMs - this.lastJumpTriggerTs <= DETECT.JUMP_PRE_WINDOW_MS);
@@ -836,10 +846,16 @@ export class RunnerEngine implements GameEngine {
     const ob = this.obstacles[i];
 
     if (ob.type === 'beam') {
-      // squat is a HOLD signal — sampling at the crossing is reliable
-      this.finishObstacle(i, now, this.crouch > DETECT.SQUAT_CLEAR, {
+      // squat is a HOLD signal — sampling at the crossing is reliable —
+      // but each clear CONSUMES the squat (beamArmed): standing back up
+      // between beams is required, so every beam is a real rep
+      const armed = this.beamArmed;
+      const cleared = armed && this.crouch > DETECT.SQUAT_CLEAR;
+      if (cleared) this.beamArmed = false;
+      this.finishObstacle(i, now, cleared, {
         crouchAtGate: this.crouch,
         jumpYAtGate: this.jumpY(),
+        beamArmed: armed,
       });
       return;
     }

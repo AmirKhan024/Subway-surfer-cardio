@@ -1959,3 +1959,85 @@ describe('RunnerEngine — duck-release overshoot', () => {
     expect(maxY).toBeLessThanOrEqual(CAMERA.EYE + 1e-9);
   });
 });
+
+// ── anti-cheat: a beam clear CONSUMES the squat (fresh rep per beam) ───────
+// The gate lives on the shared `crouch` signal, so pose/head/keyboard all
+// behave identically; keyboard drives it here (deterministic input).
+describe('RunnerEngine — beam re-arm gate (no squat-hold cheat)', () => {
+  /** hold crouch FOREVER; jump hurdles like the perfect bot (progress ≥0.8,
+   *  inside the 750ms intent window) so only beams are at stake */
+  function runHoldingBot(engine: RunnerEngine, seconds: number): { tags: { cleared: boolean; type: string }[] } {
+    engine.startPlaying();
+    let t = 1000;
+    const beams: { cleared: boolean; type: string }[] = [];
+    let jumpedFor = -1;
+    for (let i = 0; i < (seconds * 1000) / FRAME_MS; i++) {
+      t += FRAME_MS;
+      const cue = engine.getSceneState().cue;
+      engine.setControlInput({ crouchHeld: true }); // NEVER releases — the cheat
+      if (cue?.type === 'hurdle' && cue.progress >= 0.8 && jumpedFor !== cue.obstacleId) {
+        jumpedFor = cue.obstacleId;
+        engine.setControlInput({ jumpPressed: true });
+      }
+      engine.processFrame([], t);
+      for (const e of engine.drainEvents()) {
+        if (e.tag === 'OBSTACLE') {
+          beams.push({ cleared: e.data.cleared as boolean, type: e.data.type as string });
+        }
+      }
+      if (engine.isComplete()) break;
+    }
+    return { tags: beams };
+  }
+
+  it('holding a squat clears ONLY the first beam — every later beam fails', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(30_000);
+    const { tags } = runHoldingBot(engine, 40);
+    const beams = tags.filter((x) => x.type === 'beam');
+    expect(beams.length).toBeGreaterThanOrEqual(2);
+    expect(beams[0].cleared).toBe(true); // first squat is legitimate
+    for (const b of beams.slice(1)) expect(b.cleared).toBe(false); // held = no rep
+  });
+
+  it('standing up between beams re-arms the gate (normal play unaffected)', () => {
+    // the existing perfect-run bot releases crouch between beams via the
+    // cue gap — a full clean run is the strongest re-arm proof
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    const raw = engine.getRawData();
+    expect(raw.obstaclesFailed).toBe(0);
+    expect(raw.obstaclesCleared).toBeGreaterThan(0);
+  });
+
+  it('a failed (unarmed) beam does not consume the NEXT re-armed squat', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(30_000);
+    engine.startPlaying();
+    let t = 1000;
+    const beams: boolean[] = [];
+    let jumpedFor = -1;
+    let heldPhase = true; // hold through the first TWO beams, then play fair
+    for (let i = 0; i < (40 * 1000) / FRAME_MS; i++) {
+      t += FRAME_MS;
+      const cue = engine.getSceneState().cue;
+      engine.setControlInput({ crouchHeld: heldPhase ? true : cue?.type === 'beam' });
+      if (cue?.type === 'hurdle' && cue.progress >= 0.8 && jumpedFor !== cue.obstacleId) {
+        jumpedFor = cue.obstacleId;
+        engine.setControlInput({ jumpPressed: true });
+      }
+      engine.processFrame([], t);
+      for (const e of engine.drainEvents()) {
+        if (e.tag === 'OBSTACLE' && e.data.type === 'beam') {
+          beams.push(e.data.cleared as boolean);
+          if (beams.length >= 2) heldPhase = false; // release after beam 2
+        }
+      }
+      if (engine.isComplete()) break;
+    }
+    expect(beams.length).toBeGreaterThanOrEqual(3);
+    expect(beams[0]).toBe(true); // armed
+    expect(beams[1]).toBe(false); // held — cheat blocked
+    expect(beams[2]).toBe(true); // stood up, fresh squat — re-armed
+  });
+});
