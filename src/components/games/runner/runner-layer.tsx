@@ -437,6 +437,7 @@ export default function RunnerLayer({
           headMode: controlMode === 'head',
           coins: s.coinsCollected,
           timerMs: engine.getTimerRemainingMs(),
+          sessionMs: sessionSec > 0 ? sessionSec * 1000 : null,
         });
         const trackingNow =
           engine.isTracking() && (controlMode === 'keyboard' || now - lastSeenAtRef.current < 700);

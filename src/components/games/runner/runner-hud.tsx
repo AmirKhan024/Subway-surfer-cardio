@@ -23,6 +23,8 @@ export interface HudState {
   coins: number;
   /** session time remaining in ms (game-clock time), null = no timer */
   timerMs: number | null;
+  /** chosen session length in ms — drives the top progress bar */
+  sessionMs: number | null;
 }
 
 function fmtTimer(ms: number): string {
@@ -88,8 +90,25 @@ export function ActionCue({
 
 export default function RunnerHUD({ hud }: { hud: HudState }) {
   const timerLow = hud.timerMs !== null && hud.timerMs <= 10_000;
+  const progress =
+    hud.timerMs !== null && hud.sessionMs !== null && hud.sessionMs > 0
+      ? Math.min(1, Math.max(0, 1 - hud.timerMs / hud.sessionMs))
+      : null;
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
+      {/* session progress — thin top bar filling toward the goal
+          (scaleX = GPU-composited; 10Hz HUD updates + a linear transition) */}
+      {progress !== null && (
+        <div
+          className="absolute inset-x-0 top-0 h-[3px] bg-white/10"
+          style={{ marginTop: 'env(safe-area-inset-top, 0px)' }}
+        >
+          <div
+            className="h-full origin-left bg-cyan-400 transition-transform duration-150 ease-linear [will-change:transform]"
+            style={{ transform: `scaleX(${progress})` }}
+          />
+        </div>
+      )}
       {/* session timer — active-movement time only (pauses/rests don't tick) */}
       {hud.timerMs !== null && (
         <div
