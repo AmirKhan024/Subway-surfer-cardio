@@ -25,9 +25,12 @@ import {
   APP_VERSION,
   getLogEntries,
   installErrorCapture,
+  isDebug,
   klog,
+  printDiag,
   setRunReport,
 } from '@/lib/debug/run-logger';
+import { getPoseBackend } from '@/lib/mediapipe/pose-worker-client';
 
 // Three.js + camera stack is client-only
 const RunnerLayer = dynamic(() => import('@/components/games/runner/runner-layer'), {
@@ -120,6 +123,10 @@ function emitRunReport(
   console.log('health', report.health);
   console.groupEnd();
   /* eslint-enable no-console */
+  // the one block Govind copies — auto-printed at run end under debug.
+  // (Console + __KR_LOGS persist into the report screen: screens are
+  // same-page React state; only a page reload clears them.)
+  if (debug) printDiag();
 }
 
 export default function Home() {
@@ -129,13 +136,32 @@ export default function Home() {
   const [attempt, setAttempt] = useState(0);
   const [lastRaw, setLastRaw] = useState<RunnerRawData | null>(null);
   const [endReason, setEndReason] = useState<'time' | 'lives' | null>(null);
-  const [debug] = useState(
-    () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug'),
-  );
+  // ?debug OR localStorage.KR_DEBUG='1' — one gate (run-logger.isDebug)
+  const [debug] = useState(() => isDebug());
 
   useEffect(() => {
     installErrorCapture();
     klog('BOOT', { version: APP_VERSION });
+    // device/capability report — diagnoses device-specific slowness; also
+    // surfaced at the top of __KR_DIAG() / the Copy-diagnostics blob
+    const nav = navigator as Navigator & { deviceMemory?: number };
+    klog('ENV', {
+      ua: navigator.userAgent,
+      screen: `${window.screen.width}x${window.screen.height}`,
+      viewport: `${window.innerWidth}x${window.innerHeight}`,
+      dpr: window.devicePixelRatio,
+      hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+      deviceMemory: nav.deviceMemory ?? null,
+      offscreenCanvas: typeof OffscreenCanvas !== 'undefined',
+      rvfc: typeof HTMLVideoElement !== 'undefined' &&
+        'requestVideoFrameCallback' in HTMLVideoElement.prototype,
+      createImageBitmap: typeof createImageBitmap === 'function',
+      worker: typeof Worker !== 'undefined',
+      poseBackend: getPoseBackend(), // 'none' at boot; POSE_BACKEND events trace the rest
+      poseModel: 'pose_landmarker_lite',
+      delegate: 'GPU',
+      appVersion: APP_VERSION,
+    });
   }, []);
 
   const handleSelectMode = useCallback((m: PlayMode) => {

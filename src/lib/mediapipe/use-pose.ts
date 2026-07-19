@@ -28,7 +28,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { PoseDetector } from './pose-detector';
 import { poseWorkerClient, setPoseBackend } from './pose-worker-client';
-import { klog } from '@/lib/debug/run-logger';
+import { isDebug, klog } from '@/lib/debug/run-logger';
 import type { PoseLandmarks } from '@/modules/pose/types';
 
 /** fallback rAF loop: skip detections closer together than this (~33fps) */
@@ -73,6 +73,10 @@ export function usePoseDetector(): UsePoseDetectorReturn {
   const lastSentAtRef = useRef(0);
   const callbackRef = useRef<LandmarkCallback | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  /** POSE_TIMING aggregation (~1s windows, klogged only under debug):
+   *  grabs = cadence ticks (camera rate), results = actual inferences,
+   *  ms = inference time (worker inferMs / main sync duration) */
+  const timingRef = useRef({ windowStart: 0, grabs: 0, results: 0, sumMs: 0, worstMs: 0 });
   const [isReady, setIsReady] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +111,10 @@ export function usePoseDetector(): UsePoseDetectorReturn {
           poseWorkerClient.onResult((r) => {
             inFlightRef.current = false;
             if (r.gen !== genRef.current) return;
+            const timing = timingRef.current;
+            timing.results += 1;
+            timing.sumMs += r.inferMs;
+            if (r.inferMs > timing.worstMs) timing.worstMs = r.inferMs;
             callbackRef.current?.(r.landmarks, r.timestamp);
           });
           setIsReady(true);
@@ -151,6 +159,28 @@ export function usePoseDetector(): UsePoseDetectorReturn {
       /** one detection tick; false = this session is over (torn down) */
       const detectOnce = (): boolean => {
         if (genRef.current !== gen || !videoRef.current) return false;
+        // POSE_TIMING window: camera-cadence ticks vs actual inferences
+        const timing = timingRef.current;
+        const tickAt = performance.now();
+        if (timing.windowStart === 0) timing.windowStart = tickAt;
+        timing.grabs += 1;
+        if (tickAt - timing.windowStart >= 1000) {
+          if (isDebug()) {
+            const avg = timing.results > 0 ? timing.sumMs / timing.results : 0;
+            klog('POSE_TIMING', {
+              backend: backendRef.current,
+              grabFps: timing.grabs,
+              detectFps: timing.results,
+              avgMs: Math.round(avg * 10) / 10,
+              worstMs: Math.round(timing.worstMs * 10) / 10,
+            });
+          }
+          timing.windowStart = tickAt;
+          timing.grabs = 0;
+          timing.results = 0;
+          timing.sumMs = 0;
+          timing.worstMs = 0;
+        }
         if (backendRef.current === 'worker') {
           if (inFlightRef.current) return true; // backpressure: drop frame
           inFlightRef.current = true;
@@ -178,6 +208,10 @@ export function usePoseDetector(): UsePoseDetectorReturn {
         if (!detectorRef.current?.isReady) return true;
         const timestamp = performance.now();
         const result = detectorRef.current.detectForVideo(videoRef.current, timestamp);
+        const detectMs = performance.now() - timestamp;
+        timing.results += 1;
+        timing.sumMs += detectMs;
+        if (detectMs > timing.worstMs) timing.worstMs = detectMs;
         callbackRef.current?.(result?.landmarks ?? null, timestamp);
         return true;
       };

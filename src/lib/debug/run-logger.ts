@@ -27,6 +27,8 @@ declare global {
   interface Window {
     __KR_LOGS?: LogEntry[];
     __KR_ERR_CAPTURE?: boolean;
+    /** prints the one copy-pasteable diagnostics block to the console */
+    __KR_DIAG?: () => void;
   }
 }
 
@@ -37,10 +39,20 @@ function buffer(): LogEntry[] | null {
 }
 
 let debugFlag: boolean | null = null;
-function isDebug(): boolean {
+/**
+ * Debug gate: `?debug` (any value) OR localStorage KR_DEBUG='1' (survives
+ * reloads — mobile devtools lose query params). Memoized once per load.
+ */
+export function isDebug(): boolean {
   if (typeof window === 'undefined') return false;
   if (debugFlag === null) {
-    debugFlag = new URLSearchParams(window.location.search).has('debug');
+    let ls = false;
+    try {
+      ls = window.localStorage?.getItem('KR_DEBUG') === '1';
+    } catch {
+      /* storage unavailable */
+    }
+    debugFlag = new URLSearchParams(window.location.search).has('debug') || ls;
   }
   return debugFlag;
 }
@@ -48,11 +60,12 @@ function isDebug(): boolean {
 export function klog(tag: string, data?: unknown): void {
   const buf = buffer();
   if (!buf) return;
-  buf.push({ t: performance.now(), tag, data });
+  const t = performance.now();
+  buf.push({ t, tag, data });
   if (buf.length > CAP) buf.splice(0, buf.length - CAP);
   if (isDebug()) {
     // eslint-disable-next-line no-console
-    console.log(`[KR] ${tag}`, data ?? '');
+    console.log(`[KR +${(t / 1000).toFixed(2)}s] ${tag}`, data ?? '');
   }
 }
 
@@ -76,6 +89,39 @@ export function installErrorCapture(): void {
     klog('CONSOLE_ERROR', { message: args.map((a) => String(a)).join(' ') });
     orig(...args);
   };
+  // the copy-pasteable console dump, callable anytime (incl. report screen —
+  // screens are same-page React state, so the buffer + console history
+  // survive game → gameover → report; only a page reload clears them)
+  window.__KR_DIAG = printDiag;
+  installLongTaskObserver();
+}
+
+/** Debug-only: capture main-thread stalls >50ms — the exact jank moments. */
+let longTaskInstalled = false;
+function installLongTaskObserver(): void {
+  if (longTaskInstalled || !isDebug() || typeof PerformanceObserver === 'undefined') return;
+  longTaskInstalled = true;
+  try {
+    const obs = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.duration > 50) {
+          klog('LONGTASK', { ms: Math.round(entry.duration), at: Math.round(entry.startTime) });
+        }
+      }
+    });
+    obs.observe({ entryTypes: ['longtask'] });
+  } catch {
+    /* longtask unsupported (Safari) — POSE_TIMING/FRAME_STATS still cover it */
+  }
+}
+
+/** Print the one copy-pasteable diagnostics block (also window.__KR_DIAG). */
+export function printDiag(): void {
+  /* eslint-disable no-console */
+  console.groupCollapsed('===== KR DIAG (expand, select all, copy) =====');
+  console.log(getDiagnosticsText());
+  console.groupEnd();
+  /* eslint-enable no-console */
 }
 
 // ── run report storage ────────────────────────────────────────────────────
@@ -109,7 +155,38 @@ export function formatEntries(entries: LogEntry[]): string {
     .join('\n');
 }
 
-/** The paste-ready diagnostics blob: header + RUN REPORT + event log. */
+/**
+ * Perf section: ENV + the last few FRAME_STATS / POSE_TIMING windows + all
+ * LONGTASK stalls, pulled from the ring buffer by tag. Pure — testable.
+ */
+export function formatPerfSection(entries: LogEntry[]): string {
+  const byTag = (tag: string) => entries.filter((e) => e.tag === tag);
+  const fmt = (list: LogEntry[]) =>
+    list.length === 0 ? '(none)' : formatEntries(list);
+  const lines: string[] = [];
+  const env = byTag('ENV');
+  lines.push('ENV:');
+  lines.push(
+    env.length > 0
+      ? JSON.stringify(env[env.length - 1].data, roundingReplacer, 2)
+      : '(not captured)',
+  );
+  lines.push('');
+  lines.push('FRAME_STATS (last 5 windows):');
+  lines.push(fmt(byTag('FRAME_STATS').slice(-5)));
+  lines.push('');
+  lines.push('POSE_TIMING (last 5 windows):');
+  lines.push(fmt(byTag('POSE_TIMING').slice(-5)));
+  lines.push('');
+  lines.push('POSE_LOOP / POSE_BACKEND transitions:');
+  lines.push(fmt(entries.filter((e) => e.tag === 'POSE_LOOP' || e.tag === 'POSE_BACKEND')));
+  lines.push('');
+  lines.push('LONGTASK (main-thread stalls >50ms):');
+  lines.push(fmt(byTag('LONGTASK')));
+  return lines.join('\n');
+}
+
+/** The paste-ready diagnostics blob: header + ENV/PERF + RUN REPORT + log. */
 export function getDiagnosticsText(): string {
   const lines: string[] = [];
   lines.push('===== KRIYA RUNNER DIAGNOSTICS =====');
@@ -121,9 +198,21 @@ export function getDiagnosticsText(): string {
     lines.push(`debugMode: ${isDebug()}`);
   }
   lines.push('');
+  lines.push('----- ENV / PERF -----');
+  lines.push(formatPerfSection(getLogEntries()));
+  lines.push('');
   lines.push('----- RUN REPORT -----');
   lines.push(
     lastRunReport ? JSON.stringify(lastRunReport, roundingReplacer, 2) : '(no completed run yet)',
+  );
+  lines.push('');
+  lines.push('----- CAPTURED ERRORS -----');
+  lines.push(
+    formatEntries(
+      getLogEntries().filter(
+        (e) => e.tag === 'ERROR' || e.tag === 'UNHANDLED_REJECTION' || e.tag === 'CONSOLE_ERROR',
+      ),
+    ),
   );
   lines.push('');
   lines.push('----- EVENT LOG -----');

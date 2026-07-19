@@ -734,7 +734,10 @@ export class RunnerEngine implements GameEngine {
         this.resumeGraceUntil = timestampMs + LOCO.RESUME_REACTION_MS;
         this.resumeHoldExtended = false;
       }
-      this.emit('RUN_RESUME', { frozenMs: Math.round(frozenSpan) });
+      this.emit('RUN_RESUME', {
+        frozenMs: Math.round(frozenSpan),
+        graceMs: this.locomotionGating ? LOCO.RESUME_REACTION_MS : 0,
+      });
     }
     this.speedFactor = Math.min(1, this.speedFactor + LOCO.ACCEL_PER_S * dt);
     this.gameTimeMs += dt * 1000;
@@ -761,6 +764,7 @@ export class RunnerEngine implements GameEngine {
     if (this.resumeGraceUntil !== 0) {
       if (timestampMs >= this.resumeGraceUntil) {
         this.resumeGraceUntil = 0;
+        this.emit('GRACE_RELEASE', { reason: 'expired' });
       } else {
         for (let i = 0; i < this.obstacles.length; i++) {
           if (this.resolved[i] || this.obstacles[i].atDistance <= prevDistance) continue;
@@ -773,6 +777,7 @@ export class RunnerEngine implements GameEngine {
                   timestampMs - this.lastJumpTriggerTs <= DETECT.JUMP_PRE_WINDOW_MS);
           if (acted) {
             this.resumeGraceUntil = 0;
+            this.emit('GRACE_RELEASE', { reason: 'acted' });
           } else {
             const hold = Math.max(prevDistance, ob.atDistance - LOCO.RESUME_HOLD_EPS_M);
             if (this.distance > hold) {

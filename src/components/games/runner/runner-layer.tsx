@@ -520,12 +520,17 @@ export default function RunnerLayer({
         </div>
       )}
 
-      {/* live frame-time readout (?debug=1 only; ref-written at 2Hz) */}
+      {/* debug tag + live frame-time readout (debug only; ref-written 2Hz) */}
       {debug && (
-        <div
-          ref={fpsReadoutRef}
-          className="pointer-events-none absolute bottom-24 left-3 z-30 rounded bg-slate-950/70 px-2 py-1 font-mono text-[11px] text-emerald-300"
-        />
+        <>
+          <div className="pointer-events-none absolute bottom-[8.5rem] left-3 z-30 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-amber-300">
+            DEBUG
+          </div>
+          <div
+            ref={fpsReadoutRef}
+            className="pointer-events-none absolute bottom-24 left-3 z-30 rounded bg-slate-950/70 px-2 py-1 font-mono text-[11px] text-emerald-300"
+          />
+        </>
       )}
 
       {/* screen-space juice — keyed so each event restarts its animation;
