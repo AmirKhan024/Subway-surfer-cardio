@@ -106,12 +106,6 @@ const config: Config = {
           '0%': { transform: 'scale(1.18)' },
           '100%': { transform: 'scale(1)' },
         },
-        // always-on edge speed streak: short light bar streaming downward,
-        // loops forever (transform-only; % relative to the streak's height)
-        fxRun: {
-          '0%': { transform: 'translateY(-130%)' },
-          '100%': { transform: 'translateY(430%)' },
-        },
       },
       animation: {
         'fade-up': 'fadeUp 0.5s ease-out',
@@ -123,7 +117,6 @@ const config: Config = {
         'fx-edge': 'fxEdge 0.35s ease-out forwards',
         'fx-pulse': 'fxPulse 0.4s ease-out forwards',
         'cue-pop': 'cuePop 0.2s ease-out',
-        'fx-run': 'fxRun 0.9s linear infinite',
       },
     },
   },

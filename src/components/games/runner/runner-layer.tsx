@@ -63,13 +63,7 @@ const DUST_PARTICLES = [
 const PULSE_JUMP = 'rgba(6, 182, 212, 0.5)'; // cyan = look-up/jump
 const PULSE_SQUAT = 'rgba(245, 158, 11, 0.5)'; // amber = look-down/squat
 
-/** edge speed-streak layout (static — styles never change after mount) */
-const EDGE_STREAKS = [
-  { left: '18%', height: '26vh', duration: '0.7s', delay: '-0.2s' },
-  { left: '52%', height: '36vh', duration: '1.0s', delay: '-0.65s' },
-  { left: '82%', height: '30vh', duration: '0.85s', delay: '-0.45s' },
-] as const;
-/** world speed (m/s) at which the streaks reach full base intensity */
+/** world speed (m/s) at which the edge vignette reaches full base intensity */
 const STREAK_FULL_SPEED = 9;
 
 export interface RunnerLayerProps {
@@ -396,9 +390,9 @@ export default function RunnerLayer({
       const sceneState = engine.getSceneState();
       scene.update(sceneState, now);
 
-      // edge speed-streak intensity — SMOOTHED velocity only (see ref note);
-      // duck deepens the rush (§4 wind). Idle gate w/ hysteresis stops the
-      // compositor entirely when the world is still.
+      // edge speed-vignette intensity — SMOOTHED velocity only (see ref
+      // note); duck deepens the rush (§4 wind). Idle gate w/ hysteresis
+      // hides the layers entirely when the world is still.
       const streakEl = streakRef.current;
       if (streakEl) {
         const v = scene.getVisualVelocity();
@@ -409,7 +403,6 @@ export default function RunnerLayer({
         if (on !== streakOnRef.current) {
           streakOnRef.current = on;
           streakEl.style.visibility = on ? 'visible' : 'hidden';
-          streakEl.classList.toggle('fx-streaks-idle', !on);
         }
       }
 
@@ -509,32 +502,21 @@ export default function RunnerLayer({
 
       {hud && uiPhase === 'playing' && <RunnerHUD hud={hud} />}
 
-      {/* always-on edge speed streaks — continuous "we're moving" cue.
-          JSX is INERT (classes only): opacity/visibility/idle-class are
-          written via ref in the game loop so React re-renders never clobber
-          them. Streaks are thin transform-only loops (no fullscreen paint);
-          the fx-streaks-idle gate pauses them when the world is still. */}
+      {/* edge speed-VIGNETTE — continuous "rushing forward" cue (reference
+          look): transparent center, soft light building toward the screen
+          edges; intensity = container opacity, ref-written per frame from
+          the SMOOTHED scroll velocity. No lines, no animation clocks, no
+          fullscreen paint — static gradients + opacity only. JSX is INERT
+          (React re-renders never clobber the ref-written style). */}
       {uiPhase === 'playing' && !reducedFx && (
         <div
           ref={streakRef}
           className="pointer-events-none invisible absolute inset-0 z-10 opacity-0 [will-change:opacity]"
         >
-          {(['left-0', 'right-0'] as const).map((side) => (
-            <div key={side} className={`absolute inset-y-0 ${side} w-[11vw]`}>
-              {EDGE_STREAKS.map((s, i) => (
-                <span
-                  key={i}
-                  className="fx-streak absolute w-[3px] rounded-full bg-gradient-to-b from-white/0 via-white/60 to-white/0 animate-fx-run [will-change:transform]"
-                  style={{
-                    left: s.left,
-                    height: s.height,
-                    animationDuration: s.duration,
-                    animationDelay: s.delay,
-                  }}
-                />
-              ))}
-            </div>
-          ))}
+          <div className="absolute inset-y-0 left-0 w-[16vw] bg-gradient-to-r from-white/15 to-transparent" />
+          <div className="absolute inset-y-0 left-0 w-[7vw] bg-gradient-to-r from-white/20 to-transparent" />
+          <div className="absolute inset-y-0 right-0 w-[16vw] bg-gradient-to-l from-white/15 to-transparent" />
+          <div className="absolute inset-y-0 right-0 w-[7vw] bg-gradient-to-l from-white/20 to-transparent" />
         </div>
       )}
 

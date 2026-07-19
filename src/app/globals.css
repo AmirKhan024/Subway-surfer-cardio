@@ -381,11 +381,3 @@
   text-transform: uppercase;
 }
 .font-heading { font-family: 'Space Grotesk', 'Inter', sans-serif; }
-
-/* Kriya Runner — always-on edge speed streaks. animation-play-state does
-   NOT inherit: pausing must target the streak children via this descendant
-   rule (the layer toggles .fx-streaks-idle on the container when the
-   smoothed world velocity drops to ~0, so idle costs zero compositor work). */
-.fx-streaks-idle .fx-streak {
-  animation-play-state: paused;
-}
