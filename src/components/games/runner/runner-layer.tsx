@@ -45,18 +45,20 @@ function sfxForEvent(e: EngineEvent): SfxName | null {
 
 type UiPhase = 'booting' | 'calibrating' | 'countdown' | 'playing' | 'done';
 
-/** fixed dust-burst particle offsets (deterministic — no per-render random) */
+/** fixed dust-burst particle offsets (deterministic — no per-render random).
+ *  Thrown WIDER and FASTER than the original polite puff so a landing reads
+ *  as impact; paired with the punchier fxDust keyframe. */
 const DUST_PARTICLES = [
-  { dx: -104, dy: -46, size: 10 },
-  { dx: -70, dy: -76, size: 8 },
-  { dx: -40, dy: -56, size: 11 },
-  { dx: -14, dy: -85, size: 9 },
-  { dx: 12, dy: -66, size: 10 },
-  { dx: 40, dy: -85, size: 8 },
-  { dx: 68, dy: -58, size: 11 },
-  { dx: 102, dy: -42, size: 9 },
-  { dx: -26, dy: -34, size: 7 },
-  { dx: 28, dy: -32, size: 7 },
+  { dx: -148, dy: -62, size: 14 },
+  { dx: -100, dy: -104, size: 11 },
+  { dx: -58, dy: -78, size: 15 },
+  { dx: -20, dy: -118, size: 12 },
+  { dx: 16, dy: -92, size: 14 },
+  { dx: 56, dy: -118, size: 11 },
+  { dx: 96, dy: -80, size: 15 },
+  { dx: 144, dy: -58, size: 12 },
+  { dx: -36, dy: -46, size: 9 },
+  { dx: 40, dy: -44, size: 9 },
 ] as const;
 
 /** head-mode vignette pulse colors (gameplay signal colors) */
@@ -147,10 +149,18 @@ export default function RunnerLayer({
    *  scene follower, or the streaks would strobe on the frames it masks) */
   const streakRef = useRef<HTMLDivElement>(null);
   const streakOnRef = useRef(false);
+  /** wind-rush gust 0..1: impulsed when a beam rips overhead, decayed every
+   *  frame so the edge streaks briefly intensify with the whoosh */
+  const gustRef = useRef(0);
+  /** last frame ts for the gust's frame-rate-independent decay */
+  const gustLastAtRef = useRef(0);
   /** screen-space juice timestamps (keyed CSS animations; 0 = never fired) */
   const [fxJump, setFxJump] = useState(0);
   const [fxDust, setFxDust] = useState(0);
   const [fxStreak, setFxStreak] = useState(0);
+  /** damage cue: localized red edge-flash (replaces the old full-screen red
+   *  hit plane); 0 = never fired. Fires in every mode on a missed obstacle. */
+  const [fxHit, setFxHit] = useState(0);
   /** head-mode edge-vignette pulse: 0 = off, else {t, color} */
   const [fxPulse, setFxPulse] = useState<{ t: number; color: string } | null>(null);
   const [reducedFx] = useState(
@@ -375,11 +385,18 @@ export default function RunnerLayer({
         // transform/opacity only, skipped under prefers-reduced-motion.
         // (The old fullscreen conic-gradient caused the head-mode lag; body
         // mode now uses cheap edge bars, head mode an opacity-only vignette.)
+        // damage cue — all modes (a hit is a hit in pose OR head mode)
+        const obstacleHit = e.tag === 'OBSTACLE' && e.data.cleared === false;
         if (!reducedFx) {
+          if (obstacleHit) setFxHit(now);
           if (controlMode === 'pose') {
             if (e.tag === 'JUMP_TRIGGER') setFxJump(now);
             if (e.tag === 'LAND') setFxDust(now);
-            if (beamCleared) setFxStreak(now);
+            // beam rips overhead: shadow sweep + a gust of edge wind-rush
+            if (beamCleared) {
+              setFxStreak(now);
+              gustRef.current = 1;
+            }
           } else if (controlMode === 'head') {
             if (e.tag === 'JUMP_TRIGGER') setFxPulse({ t: now, color: PULSE_JUMP });
             if (e.tag === 'SQUAT_START') setFxPulse({ t: now, color: PULSE_SQUAT });
@@ -396,8 +413,21 @@ export default function RunnerLayer({
       const streakEl = streakRef.current;
       if (streakEl) {
         const v = scene.getVisualVelocity();
-        const intensity =
-          Math.min(1, Math.max(0, v) / STREAK_FULL_SPEED) * (0.45 + 0.3 * sceneState.crouch);
+        // beam-clear gust: decays ~4/s, briefly intensifying the wind rush
+        if (gustRef.current > 0) {
+          const gustDt =
+            gustLastAtRef.current === 0
+              ? 0
+              : Math.min(0.1, Math.max(0, (now - gustLastAtRef.current) / 1000));
+          gustRef.current = Math.max(0, gustRef.current - gustDt * 4);
+        }
+        gustLastAtRef.current = now;
+        const intensity = Math.min(
+          1,
+          Math.min(1, Math.max(0, v) / STREAK_FULL_SPEED) *
+            (0.45 + 0.3 * sceneState.crouch) +
+            0.35 * gustRef.current,
+        );
         streakEl.style.opacity = intensity.toFixed(3);
         const on = streakOnRef.current ? intensity > 0.02 : intensity > 0.05;
         if (on !== streakOnRef.current) {
@@ -549,15 +579,38 @@ export default function RunnerLayer({
           <div className="absolute inset-y-0 right-0 w-[12vw] animate-fx-edge bg-gradient-to-l from-white/20 to-transparent [will-change:opacity,transform]" />
         </div>
       )}
-      {/* head-mode feedback: edge-vignette pulse (static box-shadow, the
-          animation is opacity-only — composites as a single layer) */}
+      {/* head-mode feedback: LOCALIZED left/right edge tint (was a
+          full-screen inset box-shadow that read as a full-viewport wash) —
+          transparent center, opacity-only fade, single composited layer */}
       {fxPulse && (
         <div
           key={`p${fxPulse.t}`}
           onAnimationEnd={() => setFxPulse(null)}
           className="pointer-events-none absolute inset-0 z-20 animate-fx-pulse [will-change:opacity]"
-          style={{ boxShadow: `inset 0 0 60px 20px ${fxPulse.color}` }}
-        />
+        >
+          <div
+            className="absolute inset-y-0 left-0 w-[16vw]"
+            style={{ background: `linear-gradient(to right, ${fxPulse.color}, transparent)` }}
+          />
+          <div
+            className="absolute inset-y-0 right-0 w-[16vw]"
+            style={{ background: `linear-gradient(to left, ${fxPulse.color}, transparent)` }}
+          />
+        </div>
+      )}
+      {/* damage cue: LOCALIZED red edge-flash (replaces the old full-screen
+          red plane / pink tint) — transparent center, opacity-only fade */}
+      {fxHit > 0 && (
+        <div
+          key={`h${fxHit}`}
+          onAnimationEnd={() => setFxHit(0)}
+          className="pointer-events-none absolute inset-0 z-20 animate-fx-pulse [will-change:opacity]"
+        >
+          <div className="absolute inset-y-0 left-0 w-[18vw] bg-gradient-to-r from-red-600/55 to-transparent" />
+          <div className="absolute inset-y-0 right-0 w-[18vw] bg-gradient-to-l from-red-600/55 to-transparent" />
+          <div className="absolute inset-x-0 top-0 h-[16vh] bg-gradient-to-b from-red-600/45 to-transparent" />
+          <div className="absolute inset-x-0 bottom-0 h-[16vh] bg-gradient-to-t from-red-600/45 to-transparent" />
+        </div>
       )}
       {fxDust > 0 && (
         <div
@@ -587,7 +640,7 @@ export default function RunnerLayer({
         <div
           key={`s${fxStreak}`}
           onAnimationEnd={() => setFxStreak(0)}
-          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[35vh] animate-fx-streak bg-gradient-to-b from-slate-950/75 via-slate-900/45 to-transparent [will-change:opacity,transform]"
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[45vh] animate-fx-streak bg-gradient-to-b from-slate-950/90 via-slate-900/60 to-transparent [will-change:opacity,transform]"
         />
       )}
 

@@ -23,6 +23,11 @@ export class PoseEngine {
   private config: PoseEngineConfig;
   private _destroyed = false;
   private _lastTimestamp = -1;
+  /** the delegate that ACTUALLY initialized — 'GPU' unless createFromOptions
+   *  threw on GPU and we fell back to CPU. Read by the worker to report an
+   *  honest worker-gpu vs worker-cpu backend label (silent internal CPU
+   *  fallback can't throw, so pair this with the worker's WebGL2 probe). */
+  private _resolvedDelegate: 'CPU' | 'GPU' | null = null;
 
   constructor(config: Partial<PoseEngineConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -38,17 +43,38 @@ export class PoseEngine {
 
     const filesetResolver = await (FilesetResolver as unknown as { forVisionTasks: (path: string) => Promise<unknown> }).forVisionTasks(this.config.wasmPath!);
 
-    this.landmarker = await (PoseLandmarker as unknown as { createFromOptions: (resolver: unknown, config: unknown) => Promise<unknown> }).createFromOptions(filesetResolver, {
-      baseOptions: {
-        modelAssetPath: this.config.modelPath!,
-        delegate: this.config.delegate,
-      },
-      runningMode: 'VIDEO',
-      numPoses: this.config.numPoses,
-      minPoseDetectionConfidence: this.config.minDetectionConfidence,
-      minPosePresenceConfidence: this.config.minDetectionConfidence,
-      minTrackingConfidence: this.config.minTrackingConfidence,
-    });
+    const create = (delegate: 'CPU' | 'GPU') =>
+      (PoseLandmarker as unknown as { createFromOptions: (resolver: unknown, config: unknown) => Promise<unknown> }).createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: this.config.modelPath!,
+          delegate,
+        },
+        runningMode: 'VIDEO',
+        numPoses: this.config.numPoses,
+        minPoseDetectionConfidence: this.config.minDetectionConfidence,
+        minPosePresenceConfidence: this.config.minDetectionConfidence,
+        minTrackingConfidence: this.config.minTrackingConfidence,
+      });
+
+    const wanted = this.config.delegate ?? 'GPU';
+    try {
+      this.landmarker = await create(wanted);
+      this._resolvedDelegate = wanted;
+    } catch (err) {
+      // A GPU delegate that throws at construction (no WebGL, driver refusal)
+      // must not brick the game — retry on CPU and report it honestly.
+      if (wanted === 'GPU') {
+        this.landmarker = await create('CPU');
+        this._resolvedDelegate = 'CPU';
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  /** the delegate the model actually loaded with, or null before init */
+  get resolvedDelegate(): 'CPU' | 'GPU' | null {
+    return this._resolvedDelegate;
   }
 
   onResults(callback: PoseCallback): void {
@@ -60,7 +86,7 @@ export class PoseEngine {
    * the worker has no DOM; the main thread grabs frames and transfers
    * bitmaps in). MediaPipe's real detectForVideo takes either (ImageSource).
    */
-  detectForVideo(video: HTMLVideoElement | ImageBitmap, timestamp: number): PoseResult | null {
+  detectForVideo(video: HTMLVideoElement | ImageBitmap | HTMLCanvasElement, timestamp: number): PoseResult | null {
     if (!this.landmarker || this._destroyed) return null;
 
     // Ensure strictly increasing timestamps
@@ -70,7 +96,7 @@ export class PoseEngine {
     this._lastTimestamp = timestamp;
 
     try {
-      const result = (this.landmarker as unknown as { detectForVideo: (video: HTMLVideoElement | ImageBitmap, timestamp: number) => unknown }).detectForVideo(video, timestamp);
+      const result = (this.landmarker as unknown as { detectForVideo: (video: HTMLVideoElement | ImageBitmap | HTMLCanvasElement, timestamp: number) => unknown }).detectForVideo(video, timestamp);
       const detectionResult = result as unknown as { landmarks?: Array<Array<{ x: number; y: number; z: number; visibility?: number }>> };
 
       if (detectionResult.landmarks && detectionResult.landmarks.length > 0) {

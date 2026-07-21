@@ -521,7 +521,10 @@ describe('RunnerEngine — camera feel (hip-bob)', () => {
       t += FRAME_MS;
       engine.processFrame([], t);
     }
-    expect(standing()).toBeLessThan(eyeStanding - 0.5); // dipped ~0.75m
+    // dips ~CROUCH_DIP (0.28m). The literal dip is deliberately small — the
+    // punch now comes from the event-impulsed camDipSpring, which is
+    // pose-only, so this keyboard path sees the bare translation.
+    expect(standing()).toBeLessThan(eyeStanding - 0.15);
     engine.setControlInput({ crouchHeld: false });
     for (let i = 0; i < 40; i++) {
       t += FRAME_MS;
@@ -546,7 +549,9 @@ describe('RunnerEngine — camera feel (hip-bob)', () => {
       engine.processFrame([], t);
       peak = Math.max(peak, engine.getSceneState().cameraY);
     }
-    expect(peak).toBeGreaterThan(eyeStanding + 0.3);
+    // rises ~JUMP_RISE_M (0.35m). Small by design — the launch pop is the
+    // pose-only camRiseSpring impulse, absent on this keyboard path.
+    expect(peak).toBeGreaterThan(eyeStanding + 0.15);
   });
 });
 
@@ -1912,7 +1917,10 @@ describe('RunnerEngine — duck-release overshoot', () => {
       t += FRAME_MS;
       engine.processFrame(makeFrame({ hipY }), t);
     }
-    expect(engine.getSceneState().cameraY).toBeLessThan(CAMERA.EYE - 0.3); // deep dip
+    // deep dip — scaled to the reduced literal CROUCH_DIP (0.28m). This is a
+    // precondition for the real assertion below (the release overshoot); the
+    // event-spring dip has long since settled by this point in the hold.
+    expect(engine.getSceneState().cameraY).toBeLessThan(CAMERA.EYE - 0.15);
     let maxY = 0;
     for (const hipY of [...ramp(0.68, 0.6, 5), ...Array(30).fill(0.6)]) {
       t += FRAME_MS;

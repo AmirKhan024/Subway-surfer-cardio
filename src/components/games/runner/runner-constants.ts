@@ -156,9 +156,13 @@ export const JUICE = {
   LAND_HZ: 5.0,
   LAND_DAMP: 7,
   LAND_DURATION_S: 0.7,
-  /** FOV punches (deg) + exponential decay rate (per s) */
-  FOV_PUNCH_JUMP: 5,
+  /** FOV punches (deg) + exponential decay rate (per s). FOV is the primary
+   *  "energy" lever: it reads as speed/impact, costs ZERO camera translation
+   *  and can never judder (it's a decay, not a signal-follower). */
+  FOV_PUNCH_JUMP: 7,
   FOV_PUNCH_LAND: 3,
+  /** brief widen on the duck — "compressed under the beam", snaps back */
+  FOV_PUNCH_SQUAT: 3.5,
   FOV_PUNCH_DECAY: 5,
   /** jogging head-bob: amplitude (m) + fallback cadence (Hz). The bob is a
    *  figure-8: vertical at footfall rate + horizontal sway at half rate. */
@@ -169,11 +173,12 @@ export const JUICE = {
    *  (the single biggest "weight" read — tiny by design, never reads as lag) */
   HITSTOP_MS: 60,
   /** landing screen shake: amplitude (m), oscillation Hz, exp decay (per s) —
-   *  X-only and subtle: FPP shake is a nausea risk. HZ stays ≤14 so the
-   *  33ms-sampled decay test keeps a healthy peak margin (Nyquist). */
-  SHAKE_M: 0.03,
+   *  X-only and subtle: FPP shake is a nausea risk. HZ MUST stay ≤14 so the
+   *  33ms-sampled decay test keeps a healthy peak margin (Nyquist) — so
+   *  "sharper" comes from MORE amplitude + FASTER decay, never more Hz. */
+  SHAKE_M: 0.045,
   SHAKE_HZ: 14,
-  SHAKE_DECAY: 11,
+  SHAKE_DECAY: 14,
   /** jump anticipation: pre-rise crouch-load dip depth (m) + duration (s) */
   JUMP_DIP_M: 0.03,
   JUMP_DIP_S: 0.07,
@@ -187,7 +192,29 @@ export const JUICE = {
   DUCK_OVER_HZ: 2.2,
   DUCK_OVER_DAMP: 4,
   DUCK_OVER_DURATION_S: 0.8,
-  CROUCH_FOV: 4,
+  /** sustained FOV widen at full crouch. SMALL now: it is proportional to
+   *  `crouch`, so it's a 12fps signal-follower like the dip. The event-driven
+   *  FOV_PUNCH_SQUAT carries the duck's energy instead. */
+  CROUCH_FOV: 1.5,
+
+  /**
+   * ── Event-impulsed camera springs (pose-only) ────────────────────────
+   * The core of the "alive" feel. These are NOT driven by the 12fps pose
+   * signal — an EVENT (SQUAT_START / JUMP_TRIGGER) kicks a velocity, and a
+   * damped spring integrates it EVERY RENDER FRAME. So the motion is crisp
+   * and smooth at 60-113fps even while pose updates at ~12fps.
+   *
+   * Under-damped on purpose (ζ < 1) so the return overshoots slightly and
+   * settles — that little bounce is what reads as "weight" rather than a
+   * linear slide back.
+   */
+  CAM_SPRING_K: 190,
+  /** damping ratio: <1 = overshoot. ~0.6 gives one visible bounce. */
+  CAM_SPRING_ZETA: 0.6,
+  /** downward velocity kick on SQUAT_START (m/s) — snappy dip */
+  SQUAT_DIP_IMPULSE: 1.15,
+  /** upward velocity kick on JUMP_TRIGGER (m/s) — the launch pop */
+  JUMP_POP_IMPULSE: 1.35,
 } as const;
 
 // ── Course / world ───────────────────────────────────────────────────────
@@ -239,10 +266,23 @@ export const COIN = {
 export const CAMERA = {
   /** standing eye height, meters (scene units) */
   EYE: 1.6,
-  /** how far the eye dips at full crouch, meters */
-  CROUCH_DIP: 0.75,
-  /** eye rise at jump apex, meters */
-  JUMP_RISE_M: 0.9,
+  /**
+   * How far the eye dips at full crouch, meters — pose/keyboard.
+   * DELIBERATELY SMALL. `crouch` only updates when new landmarks land
+   * (~12fps on worker-CPU), so any LARGE value following it 1:1 reads as a
+   * slow, laggy, stair-stepped slide (owner: "camera moves too much").
+   * The literal dip is now just embodiment; the FEEL comes from the
+   * event-impulsed camDipSpring + FOV kick, which run at render rate.
+   * NOTE: multiplied by bobScale, which defaults to 0.4 → ~0.11m effective.
+   */
+  CROUCH_DIP: 0.28,
+  /** Head mode (KR1N) keeps the original dip: the springs are pose-gated
+   *  (keyboard/head byte-identical parity guards), so nothing would
+   *  compensate a reduction here and neck ROM would feel dead. */
+  HEAD_CROUCH_DIP: 0.75,
+  /** eye rise at jump apex, meters — small for the same reason as
+   *  CROUCH_DIP; the launch pop comes from camRiseSpring + FOV punch */
+  JUMP_RISE_M: 0.35,
   /** EMA damping factor: cam += (target-cam)*min(1, dt*DAMP) */
   DAMP: 18,
   /** downward pitch at full crouch, radians */

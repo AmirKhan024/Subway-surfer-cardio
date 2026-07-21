@@ -389,6 +389,7 @@ export class RunnerEngine implements GameEngine {
     this.jumpHeightSum = 0;
     this.cleanReps = 0;
     this.cameraY = CAMERA.EYE;
+    this.cameraYOut = CAMERA.EYE;
     this.cameraPitch = 0;
     this.fov = CAMERA.FOV_BASE;
     this.landSpringT = -1;
@@ -399,6 +400,10 @@ export class RunnerEngine implements GameEngine {
     this.shakeT = 0;
     this.jogSwayX = 0;
     this.duckSpringT = -1;
+    this.camDipSpring = 0;
+    this.camDipSpringV = 0;
+    this.camRiseSpring = 0;
+    this.camRiseSpringV = 0;
     this.duckDeep = false;
 
     if (this.controlMode === 'keyboard') {
@@ -1316,6 +1321,13 @@ export class RunnerEngine implements GameEngine {
           this.squatState = 'active';
           this.squatPeak = this.crouch;
           this.recordReaction('squat', now);
+          // duck juice: BODY-mode feel only (keyboard/head stay byte-identical
+          // — see the parity-lock tests). Snappy spring dip + a brief FOV
+          // widen that snaps back; both render-rate, neither follows `crouch`.
+          if (this.controlMode === 'pose') {
+            this.camDipSpringV -= JUICE.SQUAT_DIP_IMPULSE;
+            this.fovPunch += JUICE.FOV_PUNCH_SQUAT;
+          }
           // audio hook: REP fires at rep COMPLETION, too late for a sound
           this.emit('SQUAT_START', { mode: this.controlMode });
         }
@@ -1476,8 +1488,13 @@ export class RunnerEngine implements GameEngine {
     this.jumpMeasuredPeak = 0;
     this.jumpReps += 1;
     this.recordReaction('jump', now);
-    // juice is BODY-mode feel only — neck ROM has no physical jump/landing
-    if (this.controlMode === 'pose') this.fovPunch += JUICE.FOV_PUNCH_JUMP;
+    // juice is BODY-mode feel only — neck ROM has no physical jump/landing.
+    // The pop is a spring IMPULSE (render-rate), not a follow of jumpY — so
+    // the launch reads instantly even while pose updates at ~12fps.
+    if (this.controlMode === 'pose') {
+      this.fovPunch += JUICE.FOV_PUNCH_JUMP;
+      this.camRiseSpringV += JUICE.JUMP_POP_IMPULSE;
+    }
     this.emit('JUMP_TRIGGER', { mode: this.controlMode, lowImpact: this.lowImpact });
   }
 
@@ -1559,7 +1576,11 @@ export class RunnerEngine implements GameEngine {
 
   // ── camera feel ───────────────────────────────────────────────────────
 
+  /** EMA accumulator: the smoothed follow of the slow (12fps) pose signal */
   private cameraY: number = CAMERA.EYE;
+  /** VISIBLE eye height = cameraY + the transient event springs. This is what
+   *  getSceneState reports; the springs are never fed back into cameraY. */
+  private cameraYOut: number = CAMERA.EYE;
   private cameraPitch = 0;
   private fov: number = CAMERA.FOV_BASE;
   private bobScale = 1;
@@ -1581,6 +1602,18 @@ export class RunnerEngine implements GameEngine {
   private duckSpringT = -1;
   /** the current crouch episode got deep enough to earn a release spring */
   private duckDeep = false;
+  /**
+   * Event-impulsed camera springs (position m, velocity m/s) — VISUAL ONLY.
+   * These are what make squat/jump feel alive: an EVENT kicks the velocity
+   * and the spring is integrated every render frame, so the punch is crisp
+   * and smooth at 60-113fps even though `crouch` only updates at ~12fps.
+   * They are added to cameraY AFTER the EMA so DAMP can't smear them, and
+   * they are pose-only (keyboard/head must stay byte-identical).
+   */
+  private camDipSpring = 0;
+  private camDipSpringV = 0;
+  private camRiseSpring = 0;
+  private camRiseSpringV = 0;
 
   private updateCameraFeel(dt: number): void {
     // landing impact: damped spring = quick dip + tiny overshoot-and-settle
@@ -1642,9 +1675,13 @@ export class RunnerEngine implements GameEngine {
         }
       }
     }
+    // Head mode keeps the original (larger) literal dip — the event springs
+    // below are pose-only, so a reduction here would leave neck ROM with no
+    // compensating feel. Pose/keyboard use the small embodiment dip.
+    const dipM = this.controlMode === 'head' ? CAMERA.HEAD_CROUCH_DIP : CAMERA.CROUCH_DIP;
     const targetY =
       CAMERA.EYE +
-      this.bobScale * (-CAMERA.CROUCH_DIP * this.crouch + rise + landOffset + jogBob + duckOffset);
+      this.bobScale * (-dipM * this.crouch + rise + landOffset + jogBob + duckOffset);
     const a = Math.min(1, dt * CAMERA.DAMP);
     // pose descent is snappier than recovery (framerate-safe exp form) —
     // the duck should drop fast and spring back, not glide both ways
@@ -1653,6 +1690,37 @@ export class RunnerEngine implements GameEngine {
         ? 1 - Math.exp(-CAMERA.DAMP * JUICE.DUCK_DAMP_MULT * dt)
         : a;
     this.cameraY += (targetY - this.cameraY) * aY;
+    // ── event-impulsed springs, integrated at RENDER RATE ────────────────
+    // Semi-implicit Euler on a damped spring toward 0. Runs every frame, so
+    // a 12fps pose signal only *triggers* these — it never *is* the camera.
+    // NOTE: this.cameraY is the persistent EMA accumulator; the spring is a
+    // TRANSIENT offset composed on top into cameraYOut, never fed back into
+    // the accumulator (that would integrate the offset away).
+    if (
+      this.camDipSpring !== 0 ||
+      this.camDipSpringV !== 0 ||
+      this.camRiseSpring !== 0 ||
+      this.camRiseSpringV !== 0
+    ) {
+      const k = JUICE.CAM_SPRING_K;
+      const c = 2 * JUICE.CAM_SPRING_ZETA * Math.sqrt(k);
+      this.camDipSpringV += (-k * this.camDipSpring - c * this.camDipSpringV) * dt;
+      this.camDipSpring += this.camDipSpringV * dt;
+      this.camRiseSpringV += (-k * this.camRiseSpring - c * this.camRiseSpringV) * dt;
+      this.camRiseSpring += this.camRiseSpringV * dt;
+      // settle to EXACT zero so a resting camera stays float-identical
+      if (Math.abs(this.camDipSpring) < 1e-4 && Math.abs(this.camDipSpringV) < 1e-3) {
+        this.camDipSpring = 0;
+        this.camDipSpringV = 0;
+      }
+      if (Math.abs(this.camRiseSpring) < 1e-4 && Math.abs(this.camRiseSpringV) < 1e-3) {
+        this.camRiseSpring = 0;
+        this.camRiseSpringV = 0;
+      }
+    }
+    // composed visible eye height (EMA follow + crisp event springs)
+    this.cameraYOut =
+      this.cameraY + this.bobScale * (this.camDipSpring + this.camRiseSpring);
     let targetPitch = CAMERA.PITCH_CROUCH * this.crouch * this.bobScale;
     if (this.controlMode === 'head') {
       // neck mode's own feedback: look-up tilts the camera up (flexion
@@ -1695,7 +1763,7 @@ export class RunnerEngine implements GameEngine {
       phase: this.phase,
       distance: this.distance,
       speed: this.speed,
-      cameraY: this.cameraY,
+      cameraY: this.cameraYOut,
       cameraPitch: this.cameraPitch,
       fov: this.fov,
       lives: this.lives,

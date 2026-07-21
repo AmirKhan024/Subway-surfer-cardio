@@ -68,9 +68,17 @@ export class PoseDetector {
    * Run pose detection on a single video frame.
    * Returns landmarks for the first detected person, or null.
    */
-  detectForVideo(video: HTMLVideoElement, timestamp: number): PoseResult | null {
+  detectForVideo(
+    video: HTMLVideoElement | ImageBitmap | HTMLCanvasElement,
+    timestamp: number,
+  ): PoseResult | null {
     if (!this._initialized) return null;
     return this.engine.detectForVideo(video, timestamp);
+  }
+
+  /** the delegate the underlying model actually loaded with, or null */
+  get resolvedDelegate(): 'CPU' | 'GPU' | null {
+    return this.engine.resolvedDelegate;
   }
 
   /** Register a callback invoked after each detection */

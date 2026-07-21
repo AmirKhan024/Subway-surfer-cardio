@@ -76,18 +76,23 @@ const config: Config = {
           '0%': { opacity: '0', transform: 'translateY(6px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
+        // landing dust: bigger throw + a brief scale-up before it fades, so
+        // the touchdown reads heavy rather than as a polite puff
         fxDust: {
-          '0%': { opacity: '0.9', transform: 'translate(0, 0) scale(1)' },
+          '0%': { opacity: '1', transform: 'translate(0, 0) scale(0.6)' },
+          '30%': { opacity: '0.95', transform: 'scale(1.25)' },
           '100%': {
             opacity: '0',
-            transform: 'translate(var(--dx, 0px), var(--dy, -40px)) scale(0.5)',
+            transform: 'translate(var(--dx, 0px), var(--dy, -40px)) scale(0.45)',
           },
         },
-        // beam whoosh-over: dark band rips top→bottom across the screen
+        // beam whoosh-over: bold dark shadow RIPS top→bottom as the beam
+        // passes overhead — the visceral half of clearing a duck
         fxStreak: {
           '0%': { opacity: '0', transform: 'translateY(-100%)' },
-          '15%': { opacity: '1' },
-          '100%': { opacity: '0', transform: 'translateY(320%)' },
+          '10%': { opacity: '1' },
+          '70%': { opacity: '1' },
+          '100%': { opacity: '0', transform: 'translateY(340%)' },
         },
         // jump speed-edge: partial-screen side bars sweeping down — replaces
         // the old fullscreen repeating-conic-gradient (a fullscreen repaint)
@@ -112,8 +117,8 @@ const config: Config = {
         'slide-in': 'slideIn 0.3s ease-out',
         pulse: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'screen-in': 'screenIn 0.35s ease-out',
-        'fx-dust': 'fxDust 0.45s ease-out forwards',
-        'fx-streak': 'fxStreak 0.28s ease-in forwards',
+        'fx-dust': 'fxDust 0.38s ease-out forwards',
+        'fx-streak': 'fxStreak 0.24s ease-in forwards',
         'fx-edge': 'fxEdge 0.35s ease-out forwards',
         'fx-pulse': 'fxPulse 0.4s ease-out forwards',
         'cue-pop': 'cuePop 0.2s ease-out',

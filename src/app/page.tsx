@@ -30,7 +30,7 @@ import {
   printDiag,
   setRunReport,
 } from '@/lib/debug/run-logger';
-import { getPoseBackend } from '@/lib/mediapipe/pose-worker-client';
+import { getPoseBackend, getWorkerDelegate } from '@/lib/mediapipe/pose-worker-client';
 
 // Three.js + camera stack is client-only
 const RunnerLayer = dynamic(() => import('@/components/games/runner/runner-layer'), {
@@ -159,7 +159,8 @@ export default function Home() {
       worker: typeof Worker !== 'undefined',
       poseBackend: getPoseBackend(), // 'none' at boot; POSE_BACKEND events trace the rest
       poseModel: 'pose_landmarker_lite',
-      delegate: 'GPU',
+      // resolved after the worker readies; POSE_WORKER/POSE_BACKEND carry the truth
+      delegate: getWorkerDelegate() ?? 'pending',
       appVersion: APP_VERSION,
     });
   }, []);

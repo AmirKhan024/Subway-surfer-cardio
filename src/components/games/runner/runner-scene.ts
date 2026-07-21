@@ -37,7 +37,6 @@ export class RunnerScene {
   private coinMeshes = new Map<number, THREE.Object3D>();
   /** collect-pop animations: coin id → pop start (ms) */
   private coinPops = new Map<number, number>();
-  private hitFlash!: THREE.Mesh;
   private lastFov = 0;
   private disposed = false;
   /** visual-scroll follower: a velocity-clamped smoothed distance. Legit
@@ -166,20 +165,11 @@ export class RunnerScene {
       this.scene.add(sil);
     }
 
-    // red hit-flash plane just in front of the camera
-    this.hitFlash = new THREE.Mesh(
-      new THREE.PlaneGeometry(4, 3),
-      new THREE.MeshBasicMaterial({
-        color: 0xef4444,
-        transparent: true,
-        opacity: 0,
-        fog: false,
-        depthTest: false,
-      }),
-    );
-    this.hitFlash.renderOrder = 999;
-    this.camera.add(this.hitFlash);
-    this.hitFlash.position.set(0, 0, -1.2);
+    // NOTE: the damage cue is no longer a full-screen red plane parented to
+    // the camera (it read as a full-screen pink tint over the bright sky and
+    // was one of the worst-frame paints). It's now a cheap localized red
+    // edge-flash in the React overlay, driven off the OBSTACLE(cleared:false)
+    // event — see runner-layer.tsx (fxHit).
     this.scene.add(this.camera);
   }
 
@@ -246,10 +236,7 @@ export class RunnerScene {
       this.lastFov = state.fov;
     }
 
-    // hit flash decay
-    const flashAge = state.hitFlashAt > 0 ? nowMs - state.hitFlashAt : Infinity;
-    (this.hitFlash.material as THREE.MeshBasicMaterial).opacity =
-      flashAge < 450 ? 0.45 * (1 - flashAge / 450) : 0;
+    // (damage cue moved to a localized React overlay — see fxHit)
 
     this.renderer.render(this.scene, this.camera);
   }

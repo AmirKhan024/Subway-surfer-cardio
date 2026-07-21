@@ -14,7 +14,7 @@
 import { klog } from '@/lib/debug/run-logger';
 import type { PoseLandmarks } from '@/modules/pose/types';
 
-export type PoseBackend = 'worker-gpu' | 'main-gpu' | 'none';
+export type PoseBackend = 'worker-gpu' | 'worker-cpu' | 'main-gpu' | 'none';
 
 export interface WorkerResult {
   landmarks: PoseLandmarks | null;
@@ -24,9 +24,16 @@ export interface WorkerResult {
 }
 
 let _backend: PoseBackend = 'none';
+/** the delegate the worker's model actually loaded with (null before ready) */
+let _workerDelegate: 'CPU' | 'GPU' | null = null;
 
 export function getPoseBackend(): PoseBackend {
   return _backend;
+}
+
+/** 'GPU' | 'CPU' once the worker is ready, else null — for the ENV report */
+export function getWorkerDelegate(): 'CPU' | 'GPU' | null {
+  return _workerDelegate;
 }
 
 export function setPoseBackend(b: PoseBackend, reason: string): void {
@@ -56,10 +63,18 @@ class PoseWorkerClient {
         INIT_TIMEOUT_MS,
       );
       w.onmessage = (e: MessageEvent) => {
-        const msg = e.data as { type?: string; message?: string };
+        const msg = e.data as {
+          type?: string;
+          message?: string;
+          delegate?: 'CPU' | 'GPU';
+        };
         if (msg?.type === 'ready') {
           clearTimeout(to);
           this.worker = w;
+          _workerDelegate = msg.delegate ?? null;
+          // record what actually loaded so avgMs can be cross-checked against
+          // a real delegate, not a guess (expected: CPU, by design)
+          klog('POSE_WORKER', { delegate: msg.delegate ?? 'unknown' });
           w.onmessage = (ev: MessageEvent) => {
             const m = ev.data as { type?: string };
             if (m?.type === 'result') this.resultCb?.(ev.data as WorkerResult);
@@ -106,6 +121,7 @@ class PoseWorkerClient {
     this.worker = null;
     this.ready = null;
     this.resultCb = null;
+    _workerDelegate = null;
   }
 }
 
