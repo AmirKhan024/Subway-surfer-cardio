@@ -19,9 +19,14 @@ import { preloadCueImages } from '@/lib/media/cue-preloader';
 import { MODE_MEDIA } from '@/lib/media/mode-media';
 import type { PlayMode } from './profile';
 
+/**
+ * Story names for the four actions. COPY ONLY — detection, thresholds and
+ * the in-run HUD cue labels ("JUMP"/"SQUAT") are all unchanged; mid-run you
+ * still get the plainest possible instruction.
+ */
 const CAPTION: Record<PlayMode, string> = {
-  pose: 'Jump over hurdles. Squat under the beams.',
-  head: 'Look up to jump. Look down to squat.',
+  pose: 'RUN — march in place to move down the valley. JUMP the fallen logs and stream channels. SCOOP under the bamboo and low boughs.',
+  head: 'Look UP to take the logs. Look DOWN to scoop under the boughs.',
 };
 
 export default function HowToPlay({ mode }: { mode: PlayMode }) {

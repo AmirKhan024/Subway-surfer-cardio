@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Kriya Runner — Level 1',
+  title: 'The Final Run',
   description:
-    'First-person body-controlled endless runner. Jump the hurdles, squat under the beams — your camera is the controller.',
+    'Run the Lohit valley from Kaho to Dong — out of the dark, into India’s first light. A first-person, body-controlled run; your camera is the controller.',
 };
 
 export const viewport: Viewport = {

@@ -120,11 +120,23 @@ class AudioManager {
 
   // ── music: gentle ambient pad ─────────────────────────────────────────
 
+  /**
+   * "The Final Run" pad: a drone-and-fifth shape rather than the old jazz
+   * ii-V colour — a low tonic held under a moving upper voice, which is the
+   * cheapest honest gesture toward a bansuri over a drone.
+   *
+   * TODO (audio assets): the design calls for a real bansuri melody, a
+   * cadence drum tracking stride rate, mithun bells panning in the dark, and
+   * a dungchen at the dawn. All of those need SAMPLE FILES, and this repo
+   * ships zero audio assets by design (see the header note). When assets
+   * land, drop them in public/audio/ and replace startPad() with a
+   * BufferSource loop — this API does not need to change.
+   */
   private static CHORDS: number[][] = [
-    [261.63, 329.63, 392.0, 493.88], // Cmaj7
-    [220.0, 261.63, 329.63, 392.0], // Am7
-    [174.61, 220.0, 261.63, 329.63], // Fmaj7
-    [196.0, 246.94, 293.66, 392.0], // G
+    [146.83, 220.0, 293.66, 440.0], // D drone + fifth, open
+    [146.83, 220.0, 261.63, 392.0], // upper voice steps down
+    [146.83, 196.0, 293.66, 349.23], // suspended, unresolved
+    [146.83, 220.0, 293.66, 329.63], // settles back toward the drone
   ];
 
   playMusic(): void {
@@ -217,9 +229,11 @@ class AudioManager {
     try {
       switch (name) {
         case 'coin':
-          // bright two-note rising ping
-          this.blip(987.77, 0.06, 'sine', 0.18);
-          this.blip(1318.51, 0.09, 'sine', 0.18, 0.055);
+          // a mohur landing on stone: metal-on-metal tick, not a game chime.
+          // Quiet and quick on purpose — dozens are picked up per run, and
+          // the old bright rising ping dominated a level built on restraint.
+          this.blip(2093, 0.028, 'square', 0.05);
+          this.blip(1244.51, 0.07, 'triangle', 0.09, 0.012);
           break;
         case 'jump':
           this.sweep(300, 700, 0.18, 'sine', 0.2);

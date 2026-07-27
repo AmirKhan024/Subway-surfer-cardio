@@ -7,7 +7,7 @@
  */
 export const KR1_METADATA = {
   id: 'KR1',
-  name: 'Kriya Runner — Level 1',
+  name: 'The Final Run',
   category: 'mobility',
   level: 1,
   icon: '🏃',

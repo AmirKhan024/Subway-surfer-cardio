@@ -160,7 +160,7 @@ export default function ReportScreen({
   // KR1N = head/neck-ROM run: present neck labels, never squat/jump labels
   const isHeadRun = raw.testId === 'KR1N';
   const better = score.musculage <= age;
-  const heroColor = better ? '#34d399' : '#f59e0b';
+  const heroColor = better ? '#7FBE8E' : '#E8913A';
   // younger/equal → full ring; older → progressively emptier (NOT the score:
   // a 90/100 score can still mean "older than you" and must not look full)
   const ringFraction = Math.min(1, age / score.musculage);
@@ -169,43 +169,50 @@ export default function ReportScreen({
     <main className="relative flex min-h-[100dvh] items-center justify-center p-4">
       <BackButton onClick={onHome} />
       <MuteButton />
-      <div className="w-full max-w-md rounded-glass border border-white/10 bg-surface p-7 shadow-glass">
+      <div className="w-full max-w-md rounded-glass border border-brass/15 bg-teak-deep/90 p-7 shadow-glass">
         <div className="flex items-baseline justify-between">
-          <h1 className="font-heading text-2xl font-bold text-slate-50">
+          <h1 className="font-heading text-2xl font-bold text-brass-pale">
             {reportHeading(reason)}
           </h1>
-          <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-cyan-300">
-            {isHeadRun ? 'Neck ROM Runner' : 'Runner Fitness'}
+          <span className="rounded-full border border-brass/40 bg-brass/10 px-2.5 py-0.5 text-[11px] font-semibold text-brass-light">
+            {isHeadRun ? 'Mobility · Neck' : 'Mobility · Body'}
           </span>
         </div>
 
+        {/* the arrival — flavour only; every number below is unchanged */}
+        <p className="mt-1.5 text-sm text-brass-pale/55">
+          {reason === 'lives'
+            ? 'The valley keeps what it takes. The Kosha is still yours — the light is still ahead.'
+            : 'You crest the Dong plateau with the sun full on your face. The Kosha comes off your back and opens.'}
+        </p>
+
         {/* muscle-age hero */}
         {score.incomplete ? (
-          <div className="mt-5 rounded-2xl border border-white/10 bg-slate-900/60 p-5 text-center">
-            <div className="text-sm text-slate-300">
-              No movement detected — play a course to earn a Runner Fitness score.
+          <div className="mt-5 rounded-2xl border border-brass/15 bg-teak/60 p-5 text-center">
+            <div className="text-sm text-brass-pale/70">
+              No movement detected — take the trail to earn a Mobility Musculage.
             </div>
           </div>
         ) : (
           <div className="mt-6">
             <ProgressRing fraction={t * ringFraction} color={heroColor}>
-              <div className="text-[11px] uppercase tracking-widest text-slate-400">Muscle age</div>
-              <div className="font-heading text-6xl font-black text-slate-50">
+              <div className="text-[11px] uppercase tracking-widest text-brass-pale/50">Mobility Musculage</div>
+              <div className="font-heading text-6xl font-black text-brass-pale">
                 {Math.round(t * score.musculage)}
               </div>
             </ProgressRing>
-            <div className="mt-2 text-center text-sm text-slate-400">
+            <div className="mt-2 text-center text-sm text-brass-pale/60">
               Score {conditionedPct} · You are {age}
             </div>
-            <div className="mt-1 text-center text-[11px] text-slate-500">
-              Fuller ring = muscles younger than your age
+            <div className="mt-1 text-center text-[11px] text-brass-pale/40">
+              Fuller ring = you carry the Kosha like someone younger
             </div>
             <AgeBar age={age} musculage={score.musculage} better={better} />
           </div>
         )}
 
-        <p className="mt-4 text-center text-sm text-slate-400">
-          {raw.obstaclesCleared} obstacles cleared · {Math.round(raw.distance)}m
+        <p className="mt-4 text-center text-sm text-brass-pale/60">
+          {raw.obstaclesCleared} obstacles cleared on the trail · {Math.round(raw.distance)}m
         </p>
 
         <div className="mt-4 grid grid-cols-3 gap-2">
@@ -227,25 +234,25 @@ export default function ReportScreen({
             sub="How fast you moved after the cue."
           />
           <Stat label="Time" value={`${(raw.elapsed / 1000).toFixed(0)}s`} />
-          <Stat label="Coins" value={`◉ ${raw.coinsCollected}`} />
+          <Stat label="Mohurs" value={`${raw.coinsCollected}`} />
         </div>
 
         {raw.assessmentValid === 0 && !score.incomplete && (
-          <p className="mt-3 rounded-lg border border-white/10 bg-slate-900/60 px-3 py-2 text-center text-xs text-slate-400">
-            Short run — score is indicative, not assessment-grade.
+          <p className="mt-3 rounded-lg border border-brass/15 bg-teak/60 px-3 py-2 text-center text-xs text-brass-pale/60">
+            Short run — indicative only, not assessment-grade.
           </p>
         )}
 
         <div className="mt-6 flex gap-3">
           <button
             onClick={onRunAgain}
-            className="flex-1 rounded-xl bg-cyan-500 px-4 py-3 font-heading font-bold text-slate-950 transition hover:bg-cyan-400"
+            className="flex-1 rounded-xl bg-brass px-4 py-3 font-heading font-bold text-teak-deep transition hover:bg-brass-light"
           >
-            Run again
+            Run it again
           </button>
           <button
             onClick={onHome}
-            className="rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold text-slate-200 transition hover:bg-white/5"
+            className="rounded-xl border border-brass/30 px-4 py-3 text-sm font-semibold text-brass-pale transition hover:bg-brass/10"
           >
             Home
           </button>
@@ -258,7 +265,7 @@ export default function ReportScreen({
           </div>
         )}
 
-        <p className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-center text-xs text-amber-200">
+        <p className="mt-4 rounded-lg border border-saffron/30 bg-saffron/10 px-3 py-2 text-center text-xs text-brass-pale">
           ⚠️ Avoid if you have active pain. Consult a physician first.
         </p>
       </div>

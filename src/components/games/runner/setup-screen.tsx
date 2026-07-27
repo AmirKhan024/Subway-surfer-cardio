@@ -78,12 +78,12 @@ export default function SetupScreen({
     <main className="relative flex min-h-[100dvh] items-center justify-center p-4 py-8">
       <BackButton onClick={onBack} />
       <MuteButton />
-      <div className="w-full max-w-md rounded-glass border border-white/10 bg-surface p-7 shadow-glass">
-        <span className="rounded-full border border-cyan-400/40 bg-cyan-500/15 px-3 py-1 text-xs font-semibold text-cyan-100">
+      <div className="w-full max-w-md rounded-glass border border-white/10 bg-teak-deep/90 p-7 shadow-glass">
+        <span className="rounded-full border border-brass/40 bg-brass/15 px-3 py-1 text-xs font-semibold text-brass-pale">
           {mode === 'head' ? 'Neck Workout' : 'Body Control'}
         </span>
         <h1 className="mt-4 text-lg font-semibold text-slate-100">
-          We need your age and gender to calculate your personalized score.
+          Before you set out: age and gender calibrate your Mobility Musculage.
         </h1>
 
         <label className="mt-5 block text-sm text-slate-300">
@@ -109,7 +109,7 @@ export default function SetupScreen({
                 onClick={() => setGender(g.id)}
                 className={
                   gender === g.id
-                    ? 'rounded-full border border-cyan-400/50 bg-cyan-500/20 px-4 py-2 text-sm font-semibold text-cyan-100'
+                    ? 'rounded-full border border-brass/60 bg-brass/20 px-4 py-2 text-sm font-semibold text-brass-pale'
                     : 'rounded-full border border-white/15 bg-slate-900/60 px-4 py-2 text-sm text-slate-300 transition hover:border-white/30'
                 }
               >
@@ -130,7 +130,7 @@ export default function SetupScreen({
                 onClick={() => setSessionSec(sec)}
                 className={
                   sessionSec === sec
-                    ? 'rounded-full border border-cyan-400/50 bg-cyan-500/20 px-4 py-2 text-sm font-semibold text-cyan-100'
+                    ? 'rounded-full border border-brass/60 bg-brass/20 px-4 py-2 text-sm font-semibold text-brass-pale'
                     : 'rounded-full border border-white/15 bg-slate-900/60 px-4 py-2 text-sm text-slate-300 transition hover:border-white/30'
                 }
               >
@@ -146,7 +146,7 @@ export default function SetupScreen({
         <div className="mt-6 flex flex-col gap-3">
           <button
             onClick={start}
-            className="rounded-xl bg-cyan-500 px-5 py-3 font-heading font-bold text-slate-950 transition hover:bg-cyan-400"
+            className="rounded-xl bg-brass px-5 py-3 font-heading font-bold text-teak-deep transition hover:bg-brass-light"
           >
             Start
           </button>
@@ -154,7 +154,7 @@ export default function SetupScreen({
             type="button"
             aria-expanded={showHow}
             onClick={() => setShowHow((s) => !s)}
-            className="rounded-xl border border-cyan-400/40 bg-cyan-500/10 px-5 py-3 font-heading font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
+            className="rounded-xl border border-brass/40 bg-brass/10 px-5 py-3 font-heading font-semibold text-brass-pale transition hover:bg-brass/20"
           >
             How to play
           </button>
@@ -176,7 +176,7 @@ export default function SetupScreen({
           Needs camera permission and internet (first run) for the pose model.
         </p>
 
-        <p className="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-center text-xs text-amber-200">
+        <p className="mt-5 rounded-lg border border-saffron/30 bg-saffron/10 px-3 py-2 text-center text-xs text-brass-pale">
           ⚠️ Avoid if you have active pain. Consult a physician first.
         </p>
       </div>
