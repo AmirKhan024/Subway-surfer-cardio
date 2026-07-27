@@ -1,5 +1,11 @@
 /**
- * Kriya Runner L1 — Three.js FPP world. DUMB VISUALIZER ONLY.
+ * "The Final Run" — Three.js FPP world. DUMB VISUALIZER ONLY.
+ *
+ * Themed as the Lohit valley, Arunachal Pradesh: Kaho to the Dong plateau,
+ * out of complete darkness into India's first sunrise. The dark→dawn ramp
+ * (see DAWN below) is the signature of the level; everything else is scenery
+ * around it. All of it is paint — obstacle footprints, lane geometry, camera
+ * and clearance heights are unchanged from the original city build.
  *
  * Reads RunnerSceneState every frame and positions meshes; it never decides
  * collision, cues, or score (all of that is RunnerEngine's job).
@@ -19,11 +25,46 @@ import type {
 } from '@/modules/game/engines/runner-engine';
 import { COIN } from './runner-constants';
 
-const HORIZON = 0xcfe8ff;
 const FOG_NEAR = 30;
 const FOG_FAR = 95;
 const LOOP_LEN = 200; // prop recycling loop, meters
 const ROAD_W = 8;
+
+/**
+ * "The Final Run" dawn ramp — Kaho (dark) → Dong plateau (first light).
+ *
+ * The whole level is ONE 60-second colour ramp; it is the signature of the
+ * re-skin. Driven by run progress (0..1) handed in by the layer — see
+ * update(). Restraint early is deliberate: ambient starts very low so the
+ * sunrise has somewhere to climb to.
+ *
+ * The mid stops (0.35/0.60) exist so that a run ending EARLY on lives still
+ * freezes on a presentable frame instead of a half-saffron smear.
+ */
+type DawnStop = {
+  p: number;
+  sky: number;
+  sunC: number;
+  sunI: number;
+  ambC: number;
+  ambI: number;
+  /** sun disc height; stays behind the ridge line until ~0.7 */
+  sunY: number;
+};
+const DAWN: DawnStop[] = [
+  { p: 0.0, sky: 0x10162e, sunC: 0x1a2338, sunI: 0.1, ambC: 0x27324f, ambI: 0.3, sunY: -8 },
+  { p: 0.35, sky: 0x2b3a4e, sunC: 0x54646f, sunI: 0.5, ambC: 0x4a5a66, ambI: 0.62, sunY: -2 },
+  { p: 0.6, sky: 0x4a5a66, sunC: 0x9b8b78, sunI: 0.9, ambC: 0x6f7a84, ambI: 0.88, sunY: 6 },
+  { p: 0.75, sky: 0xe8913a, sunC: 0xffb066, sunI: 1.7, ambC: 0xc98a5a, ambI: 1.08, sunY: 22 },
+  { p: 0.9, sky: 0xf5c542, sunC: 0xffd98a, sunI: 2.2, ambC: 0xe8c07a, ambI: 1.3, sunY: 32 },
+  { p: 1.0, sky: 0xf2f4f0, sunC: 0xffffff, sunI: 2.4, ambC: 0xdfe7ee, ambI: 1.5, sunY: 40 },
+];
+/** hard translucent green of the Lohit — NOT blue, NOT plains-brown */
+const LOHIT_GREEN = 0x1e7a5e;
+
+function lerpNum(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
 
 export class RunnerScene {
   private renderer: THREE.WebGLRenderer;
@@ -32,6 +73,17 @@ export class RunnerScene {
   private road!: THREE.Mesh;
   private roadTex!: THREE.CanvasTexture;
   private clouds: THREE.Mesh[] = [];
+  // ── dawn-ramp refs (written once per frame by applyDawn; nothing allocated)
+  private sunLight!: THREE.DirectionalLight;
+  private ambLight!: THREE.AmbientLight;
+  private sunDisc!: THREE.Mesh;
+  private sunDiscMat!: THREE.MeshBasicMaterial;
+  private ridgeMat!: THREE.MeshBasicMaterial;
+  private mistMat!: THREE.MeshBasicMaterial;
+  /** scratch colours — reused every frame so applyDawn allocates nothing */
+  private cA = new THREE.Color();
+  private cB = new THREE.Color();
+  private cSky = new THREE.Color();
   private props: { mesh: THREE.Object3D; baseZ: number }[] = [];
   private obstacleMeshes = new Map<number, THREE.Object3D>();
   private coinMeshes = new Map<number, THREE.Object3D>();
@@ -60,16 +112,18 @@ export class RunnerScene {
     this.renderer.setSize(w, h, false);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(HORIZON);
-    this.scene.fog = new THREE.Fog(HORIZON, FOG_NEAR, FOG_FAR);
+    this.scene.background = new THREE.Color(DAWN[0].sky);
+    this.scene.fog = new THREE.Fog(DAWN[0].sky, FOG_NEAR, FOG_FAR);
 
     this.camera = new THREE.PerspectiveCamera(65, w / h, 0.1, 160);
     this.camera.position.set(0, 1.6, 0);
 
-    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-    sun.position.set(30, 60, 20);
-    this.scene.add(sun);
-    this.scene.add(new THREE.AmbientLight(0xbfd8ff, 1.4));
+    // lights start at the DARK end of the ramp; applyDawn drives them
+    this.sunLight = new THREE.DirectionalLight(DAWN[0].sunC, DAWN[0].sunI);
+    this.sunLight.position.set(30, 60, 20);
+    this.scene.add(this.sunLight);
+    this.ambLight = new THREE.AmbientLight(DAWN[0].ambC, DAWN[0].ambI);
+    this.scene.add(this.ambLight);
 
     this.buildWorld();
   }
@@ -77,27 +131,26 @@ export class RunnerScene {
   // ── world construction ────────────────────────────────────────────────
 
   private buildWorld(): void {
-    // sky sun disc
-    const sunDisc = new THREE.Mesh(
-      new THREE.CircleGeometry(6, 24),
-      new THREE.MeshBasicMaterial({ color: 0xfff3c4, fog: false }),
-    );
-    sunDisc.position.set(25, 40, -140);
-    this.scene.add(sunDisc);
+    // the sunrise itself — rises from behind the ridge line across the run
+    this.sunDiscMat = new THREE.MeshBasicMaterial({ color: DAWN[0].sunC, fog: false });
+    this.sunDisc = new THREE.Mesh(new THREE.CircleGeometry(6, 24), this.sunDiscMat);
+    this.sunDisc.position.set(25, DAWN[0].sunY, -140);
+    this.scene.add(this.sunDisc);
 
-    // clouds
-    const cloudMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
+    // valley mist (was clouds) — same pooled spheres, dropped low over the
+    // trail and flattened so they read as fog on the water, not sky clouds
+    this.mistMat = new THREE.MeshBasicMaterial({
+      color: 0x9fb0bd,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.3,
       fog: false,
     });
     for (let i = 0; i < 6; i++) {
-      const cloud = new THREE.Mesh(new THREE.SphereGeometry(4 + (i % 3) * 2, 8, 6), cloudMat);
-      cloud.scale.set(2.2, 0.6, 1);
-      cloud.position.set(-50 + i * 22, 26 + (i % 2) * 8, -120 - (i % 3) * 10);
-      this.scene.add(cloud);
-      this.clouds.push(cloud);
+      const mist = new THREE.Mesh(new THREE.SphereGeometry(4 + (i % 3) * 2, 8, 6), this.mistMat);
+      mist.scale.set(3.2, 0.35, 1);
+      mist.position.set(-50 + i * 22, 5 + (i % 2) * 3, -70 - (i % 3) * 22);
+      this.scene.add(mist);
+      this.clouds.push(mist);
     }
 
     // road (UV-scrolled canvas texture — cheapest possible scroll)
@@ -113,56 +166,65 @@ export class RunnerScene {
     this.road.position.set(0, 0, -LOOP_LEN / 2 + 10);
     this.scene.add(this.road);
 
-    // sidewalks + verges
+    // gravel sandbars flanking the trail + the braided Lohit channels beyond.
+    // Lane geometry and positions are UNCHANGED — this is paint only, but it
+    // is what makes the three lanes read as channel / gravel bar / channel.
     for (const side of [-1, 1]) {
-      const walk = new THREE.Mesh(
+      const bar = new THREE.Mesh(
         new THREE.PlaneGeometry(3, LOOP_LEN),
-        new THREE.MeshLambertMaterial({ color: 0xb8bec9 }),
+        new THREE.MeshLambertMaterial({ color: 0x9a9384 }),
       );
-      walk.rotation.x = -Math.PI / 2;
-      walk.position.set(side * (ROAD_W / 2 + 1.5), 0.02, -LOOP_LEN / 2 + 10);
-      this.scene.add(walk);
+      bar.rotation.x = -Math.PI / 2;
+      bar.position.set(side * (ROAD_W / 2 + 1.5), 0.02, -LOOP_LEN / 2 + 10);
+      this.scene.add(bar);
 
-      const verge = new THREE.Mesh(
+      const channel = new THREE.Mesh(
         new THREE.PlaneGeometry(40, LOOP_LEN),
-        new THREE.MeshLambertMaterial({ color: 0x7ec850 }),
+        new THREE.MeshLambertMaterial({ color: LOHIT_GREEN, transparent: true, opacity: 0.88 }),
       );
-      verge.rotation.x = -Math.PI / 2;
-      verge.position.set(side * (ROAD_W / 2 + 3 + 20), -0.01, -LOOP_LEN / 2 + 10);
-      this.scene.add(verge);
+      channel.rotation.x = -Math.PI / 2;
+      channel.position.set(side * (ROAD_W / 2 + 3 + 20), -0.01, -LOOP_LEN / 2 + 10);
+      this.scene.add(channel);
     }
 
-    // recycled roadside props: buildings, trees, lamps
-    const windowTexA = makeWindowTexture(0x3a4a63, 0xffe9a8);
-    const windowTexB = makeWindowTexture(0x51402f, 0xcfe6ff);
+    // recycled trailside props. Counts and x/z placement are kept from the
+    // city build so the draw count does not grow — only the art changed.
+    // (part counts per prop are LOWER than the city's, see the factories)
+    const lampWindows = makeWindowTexture(0x2a2620, 0xffcf6a); // butter-lamp glow
     for (let i = 0; i < 14; i++) {
       const side = i % 2 === 0 ? -1 : 1;
-      const b = makeBuilding(i, i % 2 === 0 ? windowTexA : windowTexB);
+      // every 4th slope prop is a gonpa/house — the only lit thing in the dark
+      const b = i % 4 === 3 ? makeGonpa(i, lampWindows) : makePine(i);
       b.position.x = side * (ROAD_W / 2 + 10 + (i % 4) * 3);
       this.addProp(b, (i / 14) * LOOP_LEN);
     }
     for (let i = 0; i < 10; i++) {
       const side = i % 2 === 0 ? -1 : 1;
-      const t = makeTree();
+      // alternating prayer-flag lines and mani-stone stacks at the trail edge
+      const t = i % 2 === 0 ? makePrayerFlags() : makeManiStack();
       t.position.x = side * (ROAD_W / 2 + 4.2);
       this.addProp(t, (i / 10) * LOOP_LEN + 7);
     }
     for (let i = 0; i < 8; i++) {
       const side = i % 2 === 0 ? -1 : 1;
-      const l = makeLamp();
+      // milestone stones counting the trail down, with the odd butter lamp
+      const l = makeTrailMarker(i);
       l.position.x = side * (ROAD_W / 2 + 2.2);
-      l.scale.x = side; // arm faces the road
+      l.scale.x = side;
       this.addProp(l, (i / 8) * LOOP_LEN + 3);
     }
 
-    // distant skyline silhouette
+    // the ridge line — one SHARED material so the dawn ramp tints all ten
+    // peaks with a single write per frame
+    this.ridgeMat = new THREE.MeshBasicMaterial({ color: 0x0b1020 });
     for (let i = 0; i < 10; i++) {
-      const sil = new THREE.Mesh(
-        new THREE.BoxGeometry(10 + (i % 4) * 6, 18 + (i % 5) * 8, 4),
-        new THREE.MeshBasicMaterial({ color: 0xa9c4e0 }),
+      const peak = new THREE.Mesh(
+        new THREE.ConeGeometry(9 + (i % 4) * 4, 26 + (i % 5) * 12, 4),
+        this.ridgeMat,
       );
-      sil.position.set(-70 + i * 16, 9, -130);
-      this.scene.add(sil);
+      peak.position.set(-70 + i * 16, 9, -130);
+      peak.rotation.y = Math.PI / 4;
+      this.scene.add(peak);
     }
 
     // NOTE: the damage cue is no longer a full-screen red plane parented to
@@ -180,8 +242,15 @@ export class RunnerScene {
 
   // ── per-frame update (reads engine state, renders) ────────────────────
 
-  update(state: RunnerSceneState, nowMs: number): void {
+  /**
+   * @param progress 0..1 run progress, ONLY used to drive the dark→dawn
+   *   colour ramp. Purely cosmetic: nothing here feeds back into the engine,
+   *   and the default keeps every existing caller valid.
+   */
+  update(state: RunnerSceneState, nowMs: number, progress = 0): void {
     if (this.disposed) return;
+
+    this.applyDawn(progress);
 
     // visual-scroll follower (see field comment): pass legitimate per-frame
     // motion 1:1, smooth only the super-speed excess of a frame hitch
@@ -239,6 +308,42 @@ export class RunnerScene {
     // (damage cue moved to a localized React overlay — see fxHit)
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * Kaho → Dong: walk the DAWN ramp and repaint sky, fog, both lights, the
+   * sun disc and the ridge/mist tints. No allocation, no geometry change, no
+   * new full-screen paint — ~6 colour writes per frame. Every Lambert surface
+   * (trail, sandbars, river, pines, stones) re-lights for free off the two
+   * lights, which is why the ground needs no per-frame touch.
+   */
+  private applyDawn(progress: number): void {
+    const p = Math.min(1, Math.max(0, progress));
+    let i = 0;
+    while (i < DAWN.length - 2 && p > DAWN[i + 1].p) i++;
+    const a = DAWN[i];
+    const b = DAWN[i + 1];
+    const t = b.p === a.p ? 0 : Math.min(1, Math.max(0, (p - a.p) / (b.p - a.p)));
+
+    // sky + fog share one colour so the horizon has no seam
+    this.cSky.copy(this.cA.setHex(a.sky)).lerp(this.cB.setHex(b.sky), t);
+    (this.scene.background as THREE.Color).copy(this.cSky);
+    (this.scene.fog as THREE.Fog).color.copy(this.cSky);
+
+    this.sunLight.color.copy(this.cA.setHex(a.sunC)).lerp(this.cB.setHex(b.sunC), t);
+    this.sunLight.intensity = lerpNum(a.sunI, b.sunI, t);
+    this.ambLight.color.copy(this.cA.setHex(a.ambC)).lerp(this.cB.setHex(b.ambC), t);
+    this.ambLight.intensity = lerpNum(a.ambI, b.ambI, t);
+
+    // the sun clears the ridge
+    this.sunDisc.position.y = lerpNum(a.sunY, b.sunY, t);
+    this.sunDiscMat.color.copy(this.cA.setHex(a.sunC)).lerp(this.cB.setHex(b.sunC), t);
+
+    // ridge reads as a silhouette against whatever the sky is doing
+    this.ridgeMat.color.copy(this.cSky).multiplyScalar(0.32);
+    // mist only becomes visible once there is light to catch
+    this.mistMat.color.copy(this.cSky).lerp(this.cA.setHex(0xffffff), 0.25);
+    this.mistMat.opacity = 0.12 + p * 0.34;
   }
 
   /** Smoothed visual velocity (m/s) — same signal as the scroll follower;
@@ -357,42 +462,92 @@ function makeRoadTexture(): THREE.CanvasTexture {
   c.width = 128;
   c.height = 256;
   const g = c.getContext('2d')!;
-  g.fillStyle = '#3f4652';
+  // gravel trail bed
+  g.fillStyle = '#38332c';
   g.fillRect(0, 0, 128, 256);
-  // edge rumble strips — DASHED so the edges scroll visibly (solid lines
-  // read as static; the dashes are most of the ground-speed sensation)
-  g.fillStyle = '#e8eaee';
+  // scattered grit — deterministic, so the trail is identical every run
+  for (let i = 0; i < 220; i++) {
+    const x = (i * 37) % 128;
+    const y = (i * 71) % 256;
+    g.fillStyle = i % 3 === 0 ? '#4a443a' : '#2e2a24';
+    g.fillRect(x, y, 2, 2);
+  }
+  // edge stones — DASHED so the edges scroll visibly (solid lines read as
+  // static; the dashes are most of the ground-speed sensation)
+  g.fillStyle = '#b9b0a0';
   for (let y = 0; y < 256; y += 16) {
     g.fillRect(6, y, 4, 9);
     g.fillRect(118, y, 4, 9);
   }
-  // center dashes
-  g.fillStyle = '#ffd34d';
+  // worn centre of the footpath
+  g.fillStyle = '#8f8676';
   for (let y = 0; y < 256; y += 64) g.fillRect(61, y, 6, 34);
   return new THREE.CanvasTexture(c);
 }
 
-function makeStripeTexture(colorA: string, colorB: string): THREE.CanvasTexture {
+/**
+ * Obstacle skins are SHARED module singletons, created once on first use.
+ * They used to be rebuilt per obstacle spawn (a fresh 128x32 canvas each
+ * time); hoisting them removes that per-spawn cost. Lazy because `document`
+ * does not exist at module scope under SSR. Never disposed — disposeObject
+ * only releases geometry + material, which is what keeps this safe.
+ */
+let barkTex: THREE.CanvasTexture | null = null;
+function barkTexture(): THREE.CanvasTexture {
+  if (barkTex) return barkTex;
   const c = document.createElement('canvas');
-  c.width = 128;
+  c.width = 64;
   c.height = 32;
   const g = c.getContext('2d')!;
-  g.fillStyle = colorA;
-  g.fillRect(0, 0, 128, 32);
-  g.fillStyle = colorB;
-  for (let x = -32; x < 128; x += 32) {
-    g.beginPath();
-    g.moveTo(x, 32);
-    g.lineTo(x + 16, 0);
-    g.lineTo(x + 32, 0);
-    g.lineTo(x + 16, 32);
-    g.closePath();
-    g.fill();
+  g.fillStyle = '#5a4630';
+  g.fillRect(0, 0, 64, 32);
+  for (let i = 0; i < 16; i++) {
+    g.fillStyle = i % 2 ? '#6d573c' : '#42331f';
+    g.fillRect((i * 7) % 64, 0, 2, 32);
   }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.repeat.set(2, 1);
-  return tex;
+  barkTex = new THREE.CanvasTexture(c);
+  barkTex.wrapS = THREE.RepeatWrapping;
+  barkTex.repeat.set(3, 1);
+  return barkTex;
+}
+
+let bambooTex: THREE.CanvasTexture | null = null;
+function bambooTexture(): THREE.CanvasTexture {
+  if (bambooTex) return bambooTex;
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 32;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#b5b268';
+  g.fillRect(0, 0, 64, 32);
+  // node bands
+  g.fillStyle = '#6f7a3a';
+  for (let x = 0; x < 64; x += 21) g.fillRect(x, 0, 3, 32);
+  g.fillStyle = '#d8d59a';
+  g.fillRect(0, 4, 64, 3);
+  bambooTex = new THREE.CanvasTexture(c);
+  bambooTex.wrapS = THREE.RepeatWrapping;
+  bambooTex.repeat.set(4, 1);
+  return bambooTex;
+}
+
+/** Lung ta — the five elements, in the traditional order. */
+let flagTex: THREE.CanvasTexture | null = null;
+function flagTexture(): THREE.CanvasTexture {
+  if (flagTex) return flagTex;
+  const c = document.createElement('canvas');
+  c.width = 80;
+  c.height = 16;
+  const g = c.getContext('2d')!;
+  const lungTa = ['#2b6cb0', '#f7f7f2', '#c53030', '#2f855a', '#e8b339'];
+  for (let i = 0; i < 5; i++) {
+    g.fillStyle = lungTa[i];
+    g.fillRect(i * 16, 0, 15, 16);
+  }
+  flagTex = new THREE.CanvasTexture(c);
+  flagTex.wrapS = THREE.RepeatWrapping;
+  flagTex.repeat.set(2, 1);
+  return flagTex;
 }
 
 function makeWindowTexture(base: number, lit: number): THREE.CanvasTexture {
@@ -414,39 +569,70 @@ function makeWindowTexture(base: number, lit: number): THREE.CanvasTexture {
   return new THREE.CanvasTexture(c);
 }
 
-/** Jump obstacle: low hurdle with cyan/white hazard stripes (jump = cyan). */
+/**
+ * JUMP obstacle: a fallen pine log across the trail.
+ *
+ * Footprint is byte-identical to the old hurdle — same span (ROAD_W * 0.72),
+ * same height (0.42), same leg positions. Only the skin changed.
+ *
+ * The pale frost band on top is NOT decoration: the old hurdle was cyan so it
+ * read instantly as "jump", and this level runs in near-darkness for its first
+ * third. The band keeps that cold, high-contrast read (and stays unlit, via
+ * MeshBasicMaterial, so the dark end of the dawn ramp cannot swallow it).
+ */
 export function makeHurdle(): THREE.Object3D {
   const group = new THREE.Group();
-  const bar = new THREE.Mesh(
-    new THREE.BoxGeometry(ROAD_W * 0.72, 0.45, 0.3),
-    new THREE.MeshLambertMaterial({ map: makeStripeTexture('#06b6d4', '#f0fdff') }),
+  const log = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.22, ROAD_W * 0.72, 8),
+    new THREE.MeshLambertMaterial({ map: barkTexture() }),
   );
-  bar.position.y = 0.42;
-  group.add(bar);
+  log.rotation.z = Math.PI / 2;
+  log.position.y = 0.42;
+  group.add(log);
+  const frost = new THREE.Mesh(
+    new THREE.BoxGeometry(ROAD_W * 0.72, 0.05, 0.26),
+    new THREE.MeshBasicMaterial({ color: 0xcfe9f0 }),
+  );
+  frost.position.y = 0.62;
+  group.add(frost);
   for (const side of [-1, 1]) {
-    const leg = new THREE.Mesh(
+    const stump = new THREE.Mesh(
       new THREE.BoxGeometry(0.14, 0.42, 0.14),
-      new THREE.MeshLambertMaterial({ color: 0x27333f }),
+      new THREE.MeshLambertMaterial({ color: 0x342e26 }),
     );
-    leg.position.set(side * ROAD_W * 0.34, 0.21, 0);
-    group.add(leg);
+    stump.position.set(side * ROAD_W * 0.34, 0.21, 0);
+    group.add(stump);
   }
   return group;
 }
 
-/** Squat obstacle: overhead beam, amber/black construction stripes, gap beneath. */
+/**
+ * SCOOP (squat) obstacle: a low bamboo bough over the trail.
+ *
+ * Same span, same posts, and the bough sits at exactly the old beam height —
+ * the clearance gap beneath is unchanged. The saffron prayer ribbon rides on
+ * TOP of the bough on purpose: nothing in this prop may hang below 1.45 or it
+ * would read as a lower ceiling than the game actually has.
+ */
 export function makeBeam(): THREE.Object3D {
   const group = new THREE.Group();
-  const beam = new THREE.Mesh(
-    new THREE.BoxGeometry(ROAD_W * 0.9, 0.55, 0.5),
-    new THREE.MeshLambertMaterial({ map: makeStripeTexture('#f59e0b', '#1c1917') }),
+  const bough = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.27, 0.27, ROAD_W * 0.9, 8),
+    new THREE.MeshLambertMaterial({ map: bambooTexture() }),
   );
-  beam.position.y = 1.45; // gap beneath — squat (eye dips to ~0.85m) fits under
-  group.add(beam);
+  bough.rotation.z = Math.PI / 2;
+  bough.position.y = 1.45; // gap beneath — squat (eye dips to ~0.85m) fits under
+  group.add(bough);
+  const ribbon = new THREE.Mesh(
+    new THREE.BoxGeometry(ROAD_W * 0.9, 0.1, 0.2),
+    new THREE.MeshBasicMaterial({ color: 0xf59e0b }),
+  );
+  ribbon.position.y = 1.74;
+  group.add(ribbon);
   for (const side of [-1, 1]) {
     const post = new THREE.Mesh(
       new THREE.BoxGeometry(0.22, 1.45, 0.22),
-      new THREE.MeshLambertMaterial({ color: 0x374151 }),
+      new THREE.MeshLambertMaterial({ color: 0x4a3f33 }),
     );
     post.position.set(side * ROAD_W * 0.44, 0.72, 0);
     group.add(post);
@@ -454,71 +640,143 @@ export function makeBeam(): THREE.Object3D {
   return group;
 }
 
-/** Spinning collectible: gold ring + inner disc, amber muscle-glow. */
+/** Gold mohur, from a retreating column's scattered pay-chest. */
 export function makeCoin(): THREE.Object3D {
   const group = new THREE.Group();
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(0.28, 0.07, 8, 20),
-    new THREE.MeshBasicMaterial({ color: 0xf59e0b }),
+    new THREE.MeshBasicMaterial({ color: 0xd9a441 }),
   );
   group.add(ring);
   const disc = new THREE.Mesh(
     new THREE.CircleGeometry(0.2, 16),
-    new THREE.MeshBasicMaterial({ color: 0xfbbf24, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({ color: 0xf7d872, side: THREE.DoubleSide }),
   );
   group.add(disc);
   return group;
 }
 
-function makeBuilding(i: number, windowTex: THREE.CanvasTexture): THREE.Object3D {
+/** Pine on the valley slope — 2 meshes, where the old building was 1. */
+function makePine(i: number): THREE.Object3D {
+  const group = new THREE.Group();
   const w = 6 + (i % 3) * 3;
   const h = 8 + ((i * 7) % 14);
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(w, h, 6),
-    new THREE.MeshLambertMaterial({ map: windowTex }),
+  const trunkH = h * 0.3;
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(w * 0.05, w * 0.08, trunkH, 6),
+    new THREE.MeshLambertMaterial({ color: 0x4a3a28 }),
   );
-  mesh.position.y = h / 2;
-  return mesh;
+  trunk.position.y = trunkH / 2;
+  group.add(trunk);
+  const canopyH = h * 0.85;
+  const canopy = new THREE.Mesh(
+    new THREE.ConeGeometry(w * 0.42, canopyH, 7),
+    new THREE.MeshLambertMaterial({ color: 0x1f3d2b }),
+  );
+  canopy.position.y = trunkH + canopyH / 2 - trunkH * 0.3;
+  group.add(canopy);
+  return group;
 }
 
-function makeTree(): THREE.Object3D {
+/**
+ * Gonpa (monastery) / village house. Basic-material so its butter-lamp
+ * windows stay lit through the dark opening of the run — with the prayer
+ * flags, these are the only saturated things in the first third of the level.
+ */
+function makeGonpa(i: number, windowTex: THREE.CanvasTexture): THREE.Object3D {
   const group = new THREE.Group();
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.12, 0.16, 0.8, 6),
-    new THREE.MeshLambertMaterial({ color: 0x7a5230 }),
+  const w = 6 + (i % 3) * 3;
+  const h = 8 + ((i * 7) % 14);
+  const bodyH = h * 0.6;
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(w, bodyH, 6),
+    new THREE.MeshBasicMaterial({ map: windowTex }),
   );
-  trunk.position.y = 0.4;
-  group.add(trunk);
+  body.position.y = bodyH / 2;
+  group.add(body);
+  const roof = new THREE.Mesh(
+    new THREE.BoxGeometry(w * 1.25, h * 0.12, 7),
+    new THREE.MeshBasicMaterial({ color: 0x6b2f22 }),
+  );
+  roof.position.y = bodyH + h * 0.06;
+  group.add(roof);
+  return group;
+}
+
+/** Prayer-flag line at the trail edge — unlit, so it carries colour in the dark. */
+function makePrayerFlags(): THREE.Object3D {
+  const group = new THREE.Group();
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.07, 3.4, 6),
+    new THREE.MeshLambertMaterial({ color: 0x6b5a45 }),
+  );
+  pole.position.y = 1.7;
+  group.add(pole);
+  const line = new THREE.Mesh(
+    new THREE.PlaneGeometry(3, 0.34),
+    new THREE.MeshBasicMaterial({ map: flagTexture(), side: THREE.DoubleSide }),
+  );
+  line.position.set(1.3, 2.6, 0);
+  line.rotation.z = -0.12; // the sag of a strung line
+  group.add(line);
+  return group;
+}
+
+/** Mani-stone stack at a trail junction. */
+function makeManiStack(): THREE.Object3D {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color: 0x6e6a63 });
   for (let i = 0; i < 3; i++) {
-    const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(1.1 - i * 0.28, 1.1, 8),
-      new THREE.MeshLambertMaterial({ color: 0x2f9e44 }),
-    );
-    cone.position.y = 1.1 + i * 0.62;
-    group.add(cone);
+    const s = 0.7 - i * 0.16;
+    const stone = new THREE.Mesh(new THREE.BoxGeometry(s, 0.18, s * 0.7), mat);
+    stone.position.y = 0.09 + i * 0.19;
+    stone.rotation.y = i * 0.4;
+    group.add(stone);
   }
   return group;
 }
 
-function makeLamp(): THREE.Object3D {
+/**
+ * Trail markers, alternating a tall darchor flag pole with a roadside
+ * kilometre stone. The poles are what keep the near-trail vertical rhythm the
+ * old lamp posts gave — that rhythm is a real part of the sense of speed.
+ */
+function makeTrailMarker(i: number): THREE.Object3D {
   const group = new THREE.Group();
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.06, 0.08, 4.4, 6),
-    new THREE.MeshLambertMaterial({ color: 0x4b5563 }),
+  if (i % 2 === 0) {
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.08, 4, 6),
+      new THREE.MeshLambertMaterial({ color: 0x6b5a45 }),
+    );
+    pole.position.y = 2;
+    group.add(pole);
+    const flag = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.3, 1.7),
+      new THREE.MeshBasicMaterial({ color: 0xe8913a, side: THREE.DoubleSide }),
+    );
+    flag.position.set(0.2, 3, 0);
+    group.add(flag);
+    if (i % 4 === 0) {
+      const lamp = new THREE.Mesh(
+        new THREE.SphereGeometry(0.12, 8, 6),
+        new THREE.MeshBasicMaterial({ color: 0xffcf6a }),
+      );
+      lamp.position.set(0, 4.05, 0);
+      group.add(lamp);
+    }
+    return group;
+  }
+  const stone = new THREE.Mesh(
+    new THREE.BoxGeometry(0.34, 0.62, 0.18),
+    new THREE.MeshLambertMaterial({ color: 0xe8e4da }),
   );
-  pole.position.y = 2.2;
-  group.add(pole);
-  const arm = new THREE.Mesh(
-    new THREE.BoxGeometry(1.1, 0.08, 0.08),
-    new THREE.MeshLambertMaterial({ color: 0x4b5563 }),
+  stone.position.y = 0.31;
+  group.add(stone);
+  const cap = new THREE.Mesh(
+    new THREE.BoxGeometry(0.36, 0.16, 0.2),
+    new THREE.MeshLambertMaterial({ color: 0xd9a441 }),
   );
-  arm.position.set(0.55, 4.35, 0);
-  group.add(arm);
-  const bulb = new THREE.Mesh(
-    new THREE.SphereGeometry(0.16, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xfff1b8 }),
-  );
-  bulb.position.set(1.05, 4.28, 0);
-  group.add(bulb);
+  cap.position.y = 0.66;
+  group.add(cap);
   return group;
 }

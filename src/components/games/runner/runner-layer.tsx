@@ -68,6 +68,9 @@ const PULSE_SQUAT = 'rgba(245, 158, 11, 0.5)'; // amber = look-down/squat
 /** world speed (m/s) at which the edge vignette reaches full base intensity */
 const STREAK_FULL_SPEED = 9;
 
+/** distance (m) that reaches full daylight when a run has no session timer */
+const DAWN_FALLBACK_M = 600;
+
 export interface RunnerLayerProps {
   controlMode: ControlMode;
   lowImpact: boolean;
@@ -405,7 +408,18 @@ export default function RunnerLayer({
       }
 
       const sceneState = engine.getSceneState();
-      scene.update(sceneState, now);
+      // "The Final Run" dark→dawn ramp. Cosmetic only — the scene uses this
+      // purely to colour sky/fog/lights. Same signal the HUD progress bar
+      // reads (1 - remaining/total), so the sky and the prayer-flag bar stay
+      // in lockstep and the sunrise lands exactly on the finish. Falls back
+      // to distance when there is no session timer.
+      const dawnTotal = sessionSec > 0 ? sessionSec * 1000 : 0;
+      const dawnLeft = engine.getTimerRemainingMs();
+      const dawn =
+        dawnTotal > 0 && dawnLeft !== null
+          ? Math.min(1, Math.max(0, 1 - dawnLeft / dawnTotal))
+          : Math.min(1, Math.max(0, sceneState.distance / DAWN_FALLBACK_M));
+      scene.update(sceneState, now, dawn);
 
       // edge speed-vignette intensity — SMOOTHED velocity only (see ref
       // note); duck deepens the rush (§4 wind). Idle gate w/ hysteresis
