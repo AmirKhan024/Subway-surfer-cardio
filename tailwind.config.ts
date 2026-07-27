@@ -9,6 +9,28 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // "The Final Run" — brass & teak. Warm metal on dark wood, replacing
+        // the chrome/cyan chrome. Used across the HUD and every screen so the
+        // game reads as one object.
+        brass: {
+          DEFAULT: "#C9A227",
+          light: "#E8C46A",
+          pale: "#F2DFA6",
+          deep: "#8A6F1E",
+        },
+        copper: {
+          DEFAULT: "#B87333",
+          light: "#D99058",
+        },
+        teak: {
+          DEFAULT: "#2B211A",
+          light: "#3E3126",
+          deep: "#150F0B",
+        },
+        /** the saffron of a prayer ribbon — the squat/duck signal colour */
+        saffron: "#E8913A",
+        /** frost on a fallen log — the jump signal colour */
+        frost: "#A9C9D4",
         background: "var(--color-background)",
         foreground: "var(--color-foreground)",
         primary: {

@@ -307,9 +307,14 @@ export const ASSESSMENT = {
 } as const;
 
 // ── Palette (prototype reference; gameplay signal colors) ────────────────
+// "The Final Run": brass & teak. The two action colours are deliberately
+// pulled from the OBSTACLES themselves — the cue now matches the thing you
+// are about to meet on the trail, which is a stronger read than an arbitrary
+// hue pair. They stay far apart in both temperature and lightness, because
+// telling them apart at a glance is the fastest decision in the game.
 export const COLORS = {
-  jump: '#06b6d4', // cyan = jump
-  squat: '#f59e0b', // amber = squat
+  jump: '#A9C9D4', // frost on the fallen log = jump
+  squat: '#E8913A', // saffron ribbon on the bamboo bough = duck
   danger: '#ef4444',
   text: '#f8fafc',
   muted: '#cbd5e1',

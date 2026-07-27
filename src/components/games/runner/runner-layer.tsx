@@ -62,8 +62,8 @@ const DUST_PARTICLES = [
 ] as const;
 
 /** head-mode vignette pulse colors (gameplay signal colors) */
-const PULSE_JUMP = 'rgba(6, 182, 212, 0.5)'; // cyan = look-up/jump
-const PULSE_SQUAT = 'rgba(245, 158, 11, 0.5)'; // amber = look-down/squat
+const PULSE_JUMP = 'rgba(169, 201, 212, 0.5)'; // frost = look-up/jump
+const PULSE_SQUAT = 'rgba(232, 145, 58, 0.5)'; // saffron = look-down/squat
 
 /** world speed (m/s) at which the edge vignette reaches full base intensity */
 const STREAK_FULL_SPEED = 9;
@@ -538,7 +538,7 @@ export default function RunnerLayer({
 
   // ── render ─────────────────────────────────────────────────────────────
   return (
-    <div ref={containerRef} className="fixed inset-0 overflow-hidden bg-slate-950">
+    <div ref={containerRef} className="fixed inset-0 overflow-hidden bg-teak-deep">
       {/* WebGL canvas is created imperatively in the effect (fresh per mount) */}
       <canvas ref={debugCanvasRef} className="pointer-events-none absolute inset-0 z-20 h-full w-full" />
       {/* hidden camera feed (pose mode) — PiP draws from it */}
@@ -572,7 +572,7 @@ export default function RunnerLayer({
           </div>
           <div
             ref={fpsReadoutRef}
-            className="pointer-events-none absolute bottom-24 left-3 z-30 rounded bg-slate-950/70 px-2 py-1 font-mono text-[11px] text-emerald-300"
+            className="pointer-events-none absolute bottom-24 left-3 z-30 rounded bg-teak-deep/80 px-2 py-1 font-mono text-[11px] text-emerald-300"
           />
         </>
       )}
@@ -636,7 +636,7 @@ export default function RunnerLayer({
             {DUST_PARTICLES.map((p, i) => (
               <span
                 key={i}
-                className="absolute rounded-full bg-amber-100/75 animate-fx-dust [will-change:opacity,transform]"
+                className="absolute rounded-full bg-[#E4D2B0]/75 animate-fx-dust [will-change:opacity,transform]"
                 style={{
                   width: p.size,
                   height: p.size,
@@ -654,7 +654,7 @@ export default function RunnerLayer({
         <div
           key={`s${fxStreak}`}
           onAnimationEnd={() => setFxStreak(0)}
-          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[45vh] animate-fx-streak bg-gradient-to-b from-slate-950/90 via-slate-900/60 to-transparent [will-change:opacity,transform]"
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[45vh] animate-fx-streak bg-gradient-to-b from-teak-deep/90 via-teak/60 to-transparent [will-change:opacity,transform]"
         />
       )}
 
@@ -662,7 +662,7 @@ export default function RunnerLayer({
       {(uiPhase === 'playing' || uiPhase === 'countdown') && !pauseMenu && (
         <button
           onClick={openPause}
-          className="absolute right-3 z-30 flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-slate-950/60 text-slate-50 backdrop-blur-md"
+          className="absolute right-3 z-30 flex h-11 w-11 items-center justify-center rounded-xl border border-brass/25 bg-teak-deep/75 text-slate-50 backdrop-blur-md"
           style={{ top: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
           aria-label="Pause"
         >
@@ -674,7 +674,7 @@ export default function RunnerLayer({
       {(uiPhase === 'playing' || uiPhase === 'countdown') && (
         <button
           onClick={toggleMute}
-          className="absolute bottom-10 right-3 z-30 flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-slate-950/60 text-slate-50 backdrop-blur-md"
+          className="absolute bottom-10 right-3 z-30 flex h-11 w-11 items-center justify-center rounded-xl border border-brass/25 bg-teak-deep/75 text-slate-50 backdrop-blur-md"
           aria-label={muted ? 'Unmute' : 'Mute'}
         >
           {muted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
@@ -684,20 +684,20 @@ export default function RunnerLayer({
       {/* REAL pause menu — the engine's game clock is halted (world + timer
           frozen via the runActive gate), not a fake overlay */}
       {pauseMenu && uiPhase !== 'done' && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/70 p-6 backdrop-blur-sm">
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-teak-deep/80 p-6 backdrop-blur-sm">
           <div className="w-full max-w-xs rounded-glass border border-white/10 bg-surface p-6 text-center">
             <h3 className="font-heading text-xl font-bold text-slate-50">Paused</h3>
             <p className="mt-1 text-sm text-slate-400">The run and timer are on hold.</p>
             <div className="mt-5 flex flex-col gap-2.5">
               <button
                 onClick={resumeFromPause}
-                className="rounded-xl bg-cyan-500 px-4 py-2.5 font-heading font-bold text-slate-950 transition hover:bg-cyan-400"
+                className="rounded-xl bg-brass px-4 py-2.5 font-heading font-bold text-teak-deep transition hover:bg-brass-light"
               >
                 Resume
               </button>
               <button
                 onClick={onRestart}
-                className="rounded-xl border border-cyan-400/40 bg-cyan-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
+                className="rounded-xl border border-brass/40 bg-brass/10 px-4 py-2.5 text-sm font-semibold text-brass-pale transition hover:bg-brass/20"
               >
                 Restart
               </button>
@@ -716,8 +716,8 @@ export default function RunnerLayer({
           then a soft pulsing nudge when the user rests */}
       {loco?.gated && uiPhase === 'playing' && !pauseMenu && !everStartedRef.current && (
         <div className="pointer-events-none absolute inset-x-4 top-1/3 z-30 flex justify-center">
-          <div className="rounded-2xl border border-cyan-400/40 bg-slate-950/80 px-6 py-4 text-center backdrop-blur-md motion-safe:animate-pulse">
-            <div className="font-heading text-xl font-bold text-cyan-200">
+          <div className="rounded-2xl border border-brass/40 bg-teak-deep/85 px-6 py-4 text-center backdrop-blur-md motion-safe:animate-pulse">
+            <div className="font-heading text-xl font-bold text-brass-pale">
               🏃 Jog or march in place to start running!
             </div>
             <div className="mt-1 text-sm text-slate-300">The world moves when you do.</div>
@@ -731,7 +731,7 @@ export default function RunnerLayer({
         !loco.active &&
         loco.msSinceStep > 4500 && (
           <div className="pointer-events-none absolute inset-x-4 top-1/3 z-30 flex justify-center">
-            <div className="rounded-xl border border-white/15 bg-slate-950/80 px-5 py-2.5 text-center text-sm font-semibold text-slate-200 backdrop-blur-md motion-safe:animate-pulse">
+            <div className="rounded-xl border border-brass/25 bg-teak-deep/85 px-5 py-2.5 text-center text-sm font-semibold text-slate-200 backdrop-blur-md motion-safe:animate-pulse">
               March in place to move
             </div>
           </div>
@@ -740,14 +740,14 @@ export default function RunnerLayer({
       {/* NOTE: the in-play camera PiP was removed (mobile UX) — the tracking
           safeguard survives as this text-only toast */}
       {isCameraMode && uiPhase === 'playing' && (!tracking || drifting) && (
-        <div className="pointer-events-none absolute left-1/2 top-36 z-30 -translate-x-1/2 rounded-xl border border-red-400/40 bg-slate-950/80 px-4 py-2 text-sm font-semibold text-red-300 backdrop-blur-md">
+        <div className="pointer-events-none absolute left-1/2 top-36 z-30 -translate-x-1/2 rounded-xl border border-red-400/40 bg-teak-deep/85 px-4 py-2 text-sm font-semibold text-red-300 backdrop-blur-md">
           {!tracking ? '📷 Step back into frame' : '📷 Recenter — move back to your start spot'}
         </div>
       )}
 
       {/* calibration overlay */}
       {uiPhase === 'calibrating' && !poseError && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/70 p-6 text-center backdrop-blur-sm">
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-teak-deep/80 p-6 text-center backdrop-blur-sm">
           <h2 className="font-heading text-2xl font-bold text-slate-50">
             {isHead ? 'Get comfortable' : 'Stand back'}
           </h2>
@@ -762,7 +762,7 @@ export default function RunnerLayer({
               ref={calVideoRef}
               playsInline
               muted
-              className="absolute inset-2 h-40 w-40 rounded-full bg-slate-900 object-cover"
+              className="absolute inset-2 h-40 w-40 rounded-full bg-teak object-cover"
               style={{ transform: 'scaleX(-1)' }}
             />
             <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full -rotate-90">
@@ -779,17 +779,17 @@ export default function RunnerLayer({
               />
             </svg>
           </div>
-          <div className="mt-3 text-lg font-bold text-cyan-300">
+          <div className="mt-3 text-lg font-bold text-brass-light">
             {Math.round((calStatus?.progress ?? 0) * 100)}%
           </div>
-          <p className="mt-1 text-sm text-cyan-200">{calStatus?.message ?? 'Starting camera…'}</p>
+          <p className="mt-1 text-sm text-brass-pale">{calStatus?.message ?? 'Starting camera…'}</p>
           <p className="mt-3 text-xs text-slate-400">
             🔒 Your camera video stays on your device and is never stored or uploaded.
           </p>
           {calStatus?.isTimedOut && (
             <button
               onClick={retryCalibration}
-              className="mt-4 rounded-xl bg-cyan-500 px-5 py-2 font-semibold text-slate-950"
+              className="mt-4 rounded-xl bg-brass px-5 py-2 font-semibold text-teak-deep"
             >
               Tap to retry
             </button>
@@ -811,7 +811,7 @@ export default function RunnerLayer({
 
       {/* pose failure → retry or back */}
       {poseError && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/85 p-6">
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-teak-deep/90 p-6">
           <div className="max-w-sm rounded-glass border border-white/10 bg-surface p-6 text-center">
             <h3 className="font-heading text-xl font-bold text-slate-50">Camera unavailable</h3>
             <p className="mt-2 text-sm text-slate-300">{poseError}</p>
@@ -824,7 +824,7 @@ export default function RunnerLayer({
                   setPoseError(null);
                   setRetryNonce((n) => n + 1);
                 }}
-                className="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950"
+                className="rounded-xl bg-brass px-4 py-2 text-sm font-semibold text-teak-deep"
               >
                 Retry
               </button>

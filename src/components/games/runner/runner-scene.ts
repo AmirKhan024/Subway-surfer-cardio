@@ -587,16 +587,19 @@ export function makeHurdle(): THREE.Object3D {
   const group = new THREE.Group();
   const log = new THREE.Mesh(
     new THREE.CylinderGeometry(0.22, 0.22, ROAD_W * 0.72, 8),
-    new THREE.MeshLambertMaterial({ map: barkTexture() }),
+    // emissive floor: at the dark end of the ramp a plain Lambert log goes
+    // fully black and the frost band alone reads as a floating white bar.
+    // This keeps the LOG visible as the object you have to jump.
+    new THREE.MeshLambertMaterial({ map: barkTexture(), emissive: 0x3d2e1d }),
   );
   log.rotation.z = Math.PI / 2;
   log.position.y = 0.42;
   group.add(log);
   const frost = new THREE.Mesh(
-    new THREE.BoxGeometry(ROAD_W * 0.72, 0.05, 0.26),
-    new THREE.MeshBasicMaterial({ color: 0xcfe9f0 }),
+    new THREE.BoxGeometry(ROAD_W * 0.7, 0.04, 0.2),
+    new THREE.MeshBasicMaterial({ color: 0xb8d8e2 }),
   );
-  frost.position.y = 0.62;
+  frost.position.y = 0.6;
   group.add(frost);
   for (const side of [-1, 1]) {
     const stump = new THREE.Mesh(
@@ -643,16 +646,23 @@ export function makeBeam(): THREE.Object3D {
   return group;
 }
 
-/** Gold mohur, from a retreating column's scattered pay-chest. */
+/**
+ * Gold mohur, from a retreating column's scattered pay-chest.
+ *
+ * Mesh size is PURELY visual — pickup is decided engine-side from the coin's
+ * zAhead and lane, never from this geometry — so it is safe to scale. The
+ * original ring filled a third of the screen as it passed the camera; a coin
+ * should read as a coin.
+ */
 export function makeCoin(): THREE.Object3D {
   const group = new THREE.Group();
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(0.28, 0.07, 8, 20),
+    new THREE.TorusGeometry(0.19, 0.05, 8, 20),
     new THREE.MeshBasicMaterial({ color: 0xd9a441 }),
   );
   group.add(ring);
   const disc = new THREE.Mesh(
-    new THREE.CircleGeometry(0.2, 16),
+    new THREE.CircleGeometry(0.135, 16),
     new THREE.MeshBasicMaterial({ color: 0xf7d872, side: THREE.DoubleSide }),
   );
   group.add(disc);
