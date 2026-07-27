@@ -167,6 +167,16 @@ export class RunnerEngine implements GameEngine {
   /** GAME-time ms at which the current stumble ends; 0 = not stumbling.
    *  Game time (not wall time) so a manual pause can't burn the trip off. */
   private stumbleUntilGameMs = 0;
+  /** GAME-time ms until which mohurs cannot be collected. Runs LONGER than
+   *  the trip on purpose — see STUMBLE.COLLECT_LOCKOUT_MS for the measured
+   *  reason (a trip-length lockout provably never reached a single mohur). */
+  private collectLockedUntilGameMs = 0;
+  /** dizzy-jolt envelope (camera feel only; zeroed under reduced motion) */
+  private stumbleShakeAmp = 0;
+  private stumbleShakeT = 0;
+  /** comfort: suppress the dizzy shake entirely. The timing cost, the
+   *  collection lockout and the sound are NEVER suppressed — only motion. */
+  private reducedMotion = false;
   /** consecutive cleared obstacles; a stumble breaks it. Never scored. */
   private cleanStreak = 0;
   private bestStreak = 0;
@@ -385,6 +395,9 @@ export class RunnerEngine implements GameEngine {
     this.speed = COURSE.SPEED_START;
     this.hitFlashAt = 0;
     this.stumbleUntilGameMs = 0;
+    this.collectLockedUntilGameMs = 0;
+    this.stumbleShakeAmp = 0;
+    this.stumbleShakeT = 0;
     this.cleanStreak = 0;
     this.bestStreak = 0;
     // game clock (sessionMs/locomotionGating are config — they survive reset)
@@ -841,7 +854,7 @@ export class RunnerEngine implements GameEngine {
         // THE cost of a stumble: you run straight past the mohurs. The plane
         // is still marked done, so they slide by ungathered rather than
         // queueing up to be collected once you recover.
-        const grabbed = this.isStumbling()
+        const grabbed = this.isCollectLocked()
           ? false
           : coin.aerial
             ? this.jumpY() >= COIN.AERIAL_JUMPY
@@ -994,6 +1007,15 @@ export class RunnerEngine implements GameEngine {
    */
   private beginStumble(now: number): void {
     this.stumbleUntilGameMs = this.gameTimeMs + STUMBLE.DURATION_MS;
+    this.collectLockedUntilGameMs = this.gameTimeMs + STUMBLE.COLLECT_LOCKOUT_MS;
+    // the dizzy jolt — pure camera feel, and OFF entirely under reduced
+    // motion (a lurching camera is exactly what triggers motion sickness,
+    // and this is a health app). The cost and the sound still land.
+    if (!this.reducedMotion) {
+      this.stumbleShakeAmp = STUMBLE.SHAKE_M * this.bobScale;
+      this.stumbleShakeT = 0;
+      this.fovPunch += STUMBLE.FOV_PUNCH;
+    }
     // a visible trip: the world keeps scrolling (that is what carries the
     // mohurs past you), just briefly slower. Existing locomotion accel ramps
     // it back — no new recovery machinery.
@@ -1022,9 +1044,20 @@ export class RunnerEngine implements GameEngine {
     return n;
   }
 
-  /** True while the runner is tripping (collecting disabled). */
+  /** True while the runner is tripping (shake + speed dip + clock override). */
   isStumbling(): boolean {
     return this.stumbleUntilGameMs > 0 && this.gameTimeMs < this.stumbleUntilGameMs;
+  }
+
+  /** True while mohurs stream past ungathered — outlasts the trip itself. */
+  isCollectLocked(): boolean {
+    return this.collectLockedUntilGameMs > 0 && this.gameTimeMs < this.collectLockedUntilGameMs;
+  }
+
+  /** Comfort setting: suppress the dizzy shake (motion only, never the cost). */
+  setReducedMotion(v: boolean): void {
+    this.reducedMotion = v;
+    if (v) this.stumbleShakeAmp = 0;
   }
 
   private updateCue(now: number): void {
@@ -1818,6 +1851,13 @@ export class RunnerEngine implements GameEngine {
       this.shakeAmp -= this.shakeAmp * JUICE.SHAKE_DECAY * dt;
       if (this.shakeAmp < 5e-4) this.shakeAmp = 0;
     }
+    // dizzy jolt: its own envelope so it can be heavier and settle faster
+    // than the landing shake, and so reduced motion can kill it alone
+    if (this.stumbleShakeAmp > 0) {
+      this.stumbleShakeT += dt;
+      this.stumbleShakeAmp -= this.stumbleShakeAmp * STUMBLE.SHAKE_DECAY * dt;
+      if (this.stumbleShakeAmp < 5e-4) this.stumbleShakeAmp = 0;
+    }
     this.fovPunch = Math.max(0, this.fovPunch - this.fovPunch * JUICE.FOV_PUNCH_DECAY * dt);
     const speedNorm =
       (this.speed - COURSE.SPEED_START) / (COURSE.SPEED_END - COURSE.SPEED_START);
@@ -1845,7 +1885,15 @@ export class RunnerEngine implements GameEngine {
       distance: this.distance,
       speed: this.speed,
       cameraY: this.cameraYOut,
-      cameraPitch: this.cameraPitch,
+      // dizzy pitch wobble rides ON TOP of the smoothed pitch at OUTPUT time
+      // (never written back into this.cameraPitch, or the spring would chase
+      // it). Slower than the lateral shake — that mismatch is what reads as
+      // disoriented rather than as a bump. Camera feel only.
+      cameraPitch:
+        this.cameraPitch +
+        (this.stumbleShakeAmp / STUMBLE.SHAKE_M) *
+          STUMBLE.PITCH_RAD *
+          Math.sin(this.stumbleShakeT * 2 * Math.PI * STUMBLE.PITCH_HZ),
       fov: this.fov,
       stumbles: this.stumbleCount(),
       stumbling: this.isStumbling(),
@@ -1880,7 +1928,10 @@ export class RunnerEngine implements GameEngine {
       crouch: this.crouch,
       jumpY: this.jumpY(),
       shakeX:
-        this.shakeAmp * Math.sin(this.shakeT * 2 * Math.PI * JUICE.SHAKE_HZ) + this.jogSwayX,
+        this.shakeAmp * Math.sin(this.shakeT * 2 * Math.PI * JUICE.SHAKE_HZ) +
+        this.stumbleShakeAmp *
+          Math.sin(this.stumbleShakeT * 2 * Math.PI * STUMBLE.SHAKE_HZ) +
+        this.jogSwayX,
     };
   }
 

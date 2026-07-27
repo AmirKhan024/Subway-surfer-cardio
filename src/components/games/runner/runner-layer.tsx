@@ -161,9 +161,9 @@ export default function RunnerLayer({
   const [fxJump, setFxJump] = useState(0);
   const [fxDust, setFxDust] = useState(0);
   const [fxStreak, setFxStreak] = useState(0);
-  /** damage cue: localized red edge-flash (replaces the old full-screen red
-   *  hit plane); 0 = never fired. Fires in every mode on a missed obstacle. */
-  const [fxHit, setFxHit] = useState(0);
+  /** stumble cue: localized dust-tone edge vignette; 0 = never fired.
+   *  Fires in every mode on a missed obstacle (pose, head and keyboard). */
+  const [fxStumble, setFxHit] = useState(0);
   /** head-mode edge-vignette pulse: 0 = off, else {t, color} */
   const [fxPulse, setFxPulse] = useState<{ t: number; color: string } | null>(null);
   const [reducedFx] = useState(
@@ -272,6 +272,10 @@ export default function RunnerLayer({
     engine.setDebug(debug);
     engine.setBobScale(bobScale);
     engine.setSessionMs(sessionSec * 1000);
+    // comfort: kill the dizzy jolt at the source for reduced-motion users.
+    // The 1.5s cost, the mohur lockout and the stumble sound still land —
+    // only the camera movement is suppressed.
+    engine.setReducedMotion(reducedFx);
     // march/jog-to-move applies to body control only; head mode (seated) and
     // the keyboard test path keep auto-advance
     engine.setLocomotionGating(controlMode === 'pose');
@@ -617,18 +621,19 @@ export default function RunnerLayer({
           />
         </div>
       )}
-      {/* damage cue: LOCALIZED red edge-flash (replaces the old full-screen
-          red plane / pink tint) — transparent center, opacity-only fade */}
-      {fxHit > 0 && (
+      {/* stumble cue: LOCALIZED dust vignette — transparent center,
+          opacity-only fade. Warm grit rather than damage-red: a trip is a
+          stumble on the trail, not a hit. */}
+      {fxStumble > 0 && (
         <div
-          key={`h${fxHit}`}
+          key={`h${fxStumble}`}
           onAnimationEnd={() => setFxHit(0)}
           className="pointer-events-none absolute inset-0 z-20 animate-fx-pulse [will-change:opacity]"
         >
-          <div className="absolute inset-y-0 left-0 w-[18vw] bg-gradient-to-r from-red-600/55 to-transparent" />
-          <div className="absolute inset-y-0 right-0 w-[18vw] bg-gradient-to-l from-red-600/55 to-transparent" />
-          <div className="absolute inset-x-0 top-0 h-[16vh] bg-gradient-to-b from-red-600/45 to-transparent" />
-          <div className="absolute inset-x-0 bottom-0 h-[16vh] bg-gradient-to-t from-red-600/45 to-transparent" />
+          <div className="absolute inset-y-0 left-0 w-[18vw] bg-gradient-to-r from-[#8a5a2b]/60 to-transparent" />
+          <div className="absolute inset-y-0 right-0 w-[18vw] bg-gradient-to-l from-[#8a5a2b]/60 to-transparent" />
+          <div className="absolute inset-x-0 top-0 h-[16vh] bg-gradient-to-b from-[#8a5a2b]/50 to-transparent" />
+          <div className="absolute inset-x-0 bottom-0 h-[16vh] bg-gradient-to-t from-[#8a5a2b]/50 to-transparent" />
         </div>
       )}
       {fxDust > 0 && (

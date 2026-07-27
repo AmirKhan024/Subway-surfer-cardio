@@ -323,6 +323,107 @@ describe('RunnerEngine — keyboard mode', () => {
     expect(engine.getEndReason()).toBe(null);
   });
 
+  it('a stumble makes real mohurs stream past ungathered', () => {
+    // REGRESSION: the first cut of this locked collection for exactly the
+    // trip length (1500ms). A stumble always starts ON an obstacle plane, and
+    // the coin generator keeps ground mohurs clear of every action plane —
+    // the first one sits ~9.5m downstream while 1500ms only covers ~9.44m.
+    // The lockout expired 6cm short of the first mohur and could never block
+    // a single one, so a stumble cost the player nothing at all.
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    while (!engine.isStumbling() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    // every mohur still ahead of the runner the moment the trip begins
+    const aheadAtTrip = engine
+      .getSceneState()
+      .coins.filter((c) => c.zAhead > 0)
+      .map((c) => c.id);
+
+    while (engine.isCollectLocked() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    // ...how many of those actually went BY the player uncollected?
+    const after = engine.getSceneState().coins;
+    const passedUncollected = aheadAtTrip.filter((id) => {
+      const c = after.find((x) => x.id === id);
+      return c && c.zAhead < 0 && !c.collected;
+    }).length;
+    expect(passedUncollected).toBeGreaterThanOrEqual(2);
+  });
+
+  it('the collection lockout outlasts the trip itself', () => {
+    // they are deliberately different durations — see STUMBLE.COLLECT_LOCKOUT_MS
+    expect(STUMBLE.COLLECT_LOCKOUT_MS).toBeGreaterThan(STUMBLE.DURATION_MS);
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    while (!engine.isStumbling() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    while (engine.isStumbling() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    // the trip is over but mohurs are still streaming past
+    expect(engine.isCollectLocked()).toBe(true);
+  });
+
+  it('the dizzy shake fires, is heavier than a landing, and settles fast', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    while (!engine.isStumbling() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    let peak = 0;
+    const tripStart = t;
+    while (t < tripStart + 300) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      peak = Math.max(peak, Math.abs(engine.getSceneState().shakeX));
+    }
+    // distinctly stronger than the landing shake — a trip must not read as
+    // just another touchdown
+    expect(peak).toBeGreaterThan(JUICE.SHAKE_M * 1.5);
+    // ...and settled within ~600ms rather than wobbling on
+    while (t < tripStart + 700) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    expect(Math.abs(engine.getSceneState().shakeX)).toBeLessThan(JUICE.SHAKE_M);
+  });
+
+  it('reduced motion removes the shake but KEEPS the cost and the lockout', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.setReducedMotion(true);
+    engine.startPlaying();
+    let t = 1000;
+    while (!engine.isStumbling() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    const tripStart = t;
+    let peak = 0;
+    while (t < tripStart + 400) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      peak = Math.max(peak, Math.abs(engine.getSceneState().shakeX));
+    }
+    expect(peak).toBe(0); // no dizzy jolt at all
+    expect(engine.isCollectLocked()).toBe(true); // but the cost still applies
+  });
+
   it('collecting is disabled for the stumble window, then resumes', () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
     engine.setSessionMs(60_000);
@@ -335,17 +436,17 @@ describe('RunnerEngine — keyboard mode', () => {
     }
     expect(engine.isStumbling()).toBe(true);
     const atTripStart = engine.getSceneState().coinsCollected;
-    // no mohur may be banked for as long as the trip lasts
-    while (engine.isStumbling() && t < 40_000) {
+    // no mohur may be banked for as long as the LOCKOUT lasts
+    while (engine.isCollectLocked() && t < 40_000) {
       t += FRAME_MS;
       engine.processFrame([], t);
-      // the frame that ENDS the trip may legitimately collect again — only
-      // assert on frames that were wholly inside it
-      if (engine.isStumbling()) {
+      // the frame that ENDS the lockout may legitimately collect again —
+      // only assert on frames that were wholly inside it
+      if (engine.isCollectLocked()) {
         expect(engine.getSceneState().coinsCollected).toBe(atTripStart);
       }
     }
-    expect(engine.isStumbling()).toBe(false); // recovers on its own
+    expect(engine.isCollectLocked()).toBe(false); // recovers on its own
 
     // ...and collecting genuinely comes back, so the check above is not
     // vacuously passing on a stretch of trail that simply had no mohurs

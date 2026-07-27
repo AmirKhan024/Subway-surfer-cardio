@@ -259,8 +259,25 @@ export const COURSE = {
  * block only says what HAPPENS afterwards.
  */
 export const STUMBLE = {
-  /** how long the trip lasts — the real cost is the collecting you lose */
+  /** how long the trip itself lasts: shake, speed dip, recovery */
   DURATION_MS: 1500,
+
+  /**
+   * How long mohurs cannot be picked up. Deliberately LONGER than the trip.
+   *
+   * Measured geometry (probe, seed 1337): a stumble always begins exactly ON
+   * an obstacle plane, and the coin generator keeps ground mohurs clear of
+   * every action plane — the first mohur after an obstacle sits ~9.5m
+   * downstream, then one every ~1.6m. In 1500ms the runner covers ~9.44m.
+   * So a lockout equal to the trip expired SIX CENTIMETRES before the first
+   * mohur and could never block a single one — the cost was invisible
+   * because it never actually applied.
+   *
+   * At ~2100ms the runner is ~13m past the plane, so roughly the first three
+   * mohurs of the line stream by ungathered. That is the felt cost.
+   */
+  COLLECT_LOCKOUT_MS: 2100,
+
   /** extra fairness window after the trip before a plane may be failed again,
    *  so one stumble can never chain into the next (gaps are ≥2.6s, so this
    *  is rare — but it must not be possible) */
@@ -269,6 +286,25 @@ export const STUMBLE = {
    *  locomotion accel ramps it back — the world keeps scrolling throughout,
    *  which is what carries the mohurs past you ungathered */
   SPEED_FACTOR: 0.72,
+
+  // ── the dizzy jolt (camera-feel ONLY — never feeds a gameplay signal) ──
+  /** lateral shake amplitude, m. JUICE.SHAKE_M (the landing shake) is 0.045,
+   *  so this is ~3.5x heavier — a trip must not read like a normal landing */
+  SHAKE_M: 0.16,
+  /** shake frequency, Hz. Kept ~11 rather than higher on purpose: the world
+   *  renders at 60fps, so a 17Hz shake gets only ~3.5 samples per cycle and
+   *  aliases into jitter — the peaks never actually reach the screen. ~11Hz
+   *  gives ~5.5 samples/cycle, which reads as a sharp jolt instead of noise.
+   *  (Same Nyquist trap the JUICE.SHAKE_HZ comment warns about.) */
+  SHAKE_HZ: 11,
+  /** decay rate: sharp hit that settles in ~400-600ms, not a slow wobble */
+  SHAKE_DECAY: 9,
+  /** disoriented pitch wobble, radians — a different (slower) frequency to
+   *  the lateral shake is what makes it read as "dizzy" rather than "bump" */
+  PITCH_RAD: 0.035,
+  PITCH_HZ: 6.5,
+  /** brief lens punch on the trip */
+  FOV_PUNCH: 5,
 } as const;
 
 // ── Coins (engagement ONLY — never enter the KR1 scoring bands) ──────────

@@ -135,7 +135,7 @@ export default function Home() {
   const [mode, setMode] = useState<PlayMode>('pose');
   const [attempt, setAttempt] = useState(0);
   const [lastRaw, setLastRaw] = useState<RunnerRawData | null>(null);
-  const [endReason, setEndReason] = useState<'time' | 'lives' | null>(null);
+  const [endReason, setEndReason] = useState<'time' | null>(null);
   // ?debug OR localStorage.KR_DEBUG='1' — one gate (run-logger.isDebug)
   const [debug] = useState(() => isDebug());
 
@@ -180,7 +180,7 @@ export default function Home() {
   }, []);
 
   const handleComplete = useCallback(
-    (raw: RunnerRawData, reason: 'time' | 'lives' | null) => {
+    (raw: RunnerRawData, reason: 'time' | null) => {
       if (profile) emitRunReport(raw, profile, mode, attempt, debug);
       setLastRaw(raw);
       setEndReason(reason);
