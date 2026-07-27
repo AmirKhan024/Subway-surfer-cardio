@@ -16,7 +16,9 @@ import { COLORS } from './runner-constants';
 
 export interface HudState {
   distance: number;
-  lives: number;
+  /** obstacles missed. A tally, NOT a life bar — nothing depletes toward a
+   *  fail state, because there isn't one: the run always plays to the timer. */
+  stumbles: number;
   /** obstacles cleared — raw count, no denominator (endless mode) */
   cleared: number;
   cue: CueState | null;
@@ -92,6 +94,29 @@ function MilestoneStone({ metres }: { metres: number }) {
         <span className="ml-0.5 text-[9px] font-bold text-teak/70">m</span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Stumble tally — a boot skidding on loose stone.
+ *
+ * Deliberately NOT hearts and deliberately not depleting: there is no death
+ * state any more, so a HUD element that drains toward one would be a lie.
+ * Muted so it informs without alarming mid-run.
+ */
+function StumbleIcon() {
+  return (
+    <svg viewBox="0 0 16 14" aria-hidden className="h-3.5 w-4">
+      <path
+        d="M2.5 11.5c2-1.2 3.4-2.6 4.2-4.2M6.7 7.3 5 4.6M6.7 7.3l3 .6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <path d="M10 9.6c1.6.3 2.8.9 3.6 1.9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      <circle cx="10.6" cy="3.4" r="1.5" fill="currentColor" />
+    </svg>
   );
 }
 
@@ -186,8 +211,13 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
       >
         <MilestoneStone metres={Math.floor(hud.distance)} />
         <Chip>
-          <span className="text-[#E2664A]">{'♥'.repeat(Math.max(0, hud.lives))}</span>
-          <span className="text-teak-light">{'♥'.repeat(Math.max(0, 3 - hud.lives))}</span>
+          <span
+            className="flex items-center gap-1 text-brass-pale/60"
+            title="Stumbles — the trail slows you, it never stops you"
+          >
+            <StumbleIcon />
+            {hud.stumbles}
+          </span>
         </Chip>
         <Chip>✓ {hud.cleared}</Chip>
         <Chip>

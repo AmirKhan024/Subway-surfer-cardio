@@ -48,6 +48,7 @@ import {
   ASSESSMENT,
   LOCO,
   JUICE,
+  STUMBLE,
 } from '@/components/games/runner/runner-constants';
 import type { RunnerRawData } from '@/types/raw-data';
 
@@ -100,7 +101,11 @@ export interface RunnerSceneState {
   cameraY: number;
   cameraPitch: number;
   fov: number;
-  lives: number;
+  /** obstacles missed so far. Informational ONLY — a stumble never ends the
+   *  run (there is no death state); the run ends when the timer expires. */
+  stumbles: number;
+  /** true while the runner is tripping — collecting is disabled */
+  stumbling: boolean;
   /** timestampMs of the last failed obstacle, 0 if none */
   hitFlashAt: number;
   cue: CueState | null;
@@ -155,8 +160,16 @@ export class RunnerEngine implements GameEngine {
   /** the grace clamp extended the window once the plane was reached (the
    *  glide back can eat the whole window otherwise) — one-shot per grace */
   private resumeHoldExtended = false;
-  /** why the run ended; null while running. Drives the game-over/report copy. */
-  private endReason: 'time' | 'lives' | null = null;
+  /** why the run ended; null while running. Drives the game-over/report copy.
+   *  There is exactly ONE way to end a run now — the timer. A miss makes the
+   *  runner stumble and carry on, so 'lives' no longer exists. */
+  private endReason: 'time' | null = null;
+  /** GAME-time ms at which the current stumble ends; 0 = not stumbling.
+   *  Game time (not wall time) so a manual pause can't burn the trip off. */
+  private stumbleUntilGameMs = 0;
+  /** consecutive cleared obstacles; a stumble breaks it. Never scored. */
+  private cleanStreak = 0;
+  private bestStreak = 0;
   /** next chunk index for the endless obstacle stream */
   private chunkIndex = 0;
 
@@ -268,7 +281,6 @@ export class RunnerEngine implements GameEngine {
   private coinsCollected = 0;
   private distance = 0;
   private speed: number = COURSE.SPEED_START;
-  private lives = COURSE.LIVES;
   private hitFlashAt = 0;
 
   // ── cue / reaction ──
@@ -371,8 +383,10 @@ export class RunnerEngine implements GameEngine {
     this.reactionRecorded = this.obstacles.map(() => false);
     this.distance = 0;
     this.speed = COURSE.SPEED_START;
-    this.lives = COURSE.LIVES;
     this.hitFlashAt = 0;
+    this.stumbleUntilGameMs = 0;
+    this.cleanStreak = 0;
+    this.bestStreak = 0;
     // game clock (sessionMs/locomotionGating are config — they survive reset)
     this.gameTimeMs = 0;
     this.manuallyPaused = false;
@@ -489,6 +503,12 @@ export class RunnerEngine implements GameEngine {
   /** The single gate world/timer advancement runs through. */
   isRunActive(): boolean {
     if (this.manuallyPaused) return false;
+    // A stumble is NOT a rest. Breaking stride is exactly what tripping looks
+    // like, so without this the locomotion gate would freeze the clock and
+    // the 1.5s cost would be free — the trip has to actually cost time.
+    // Tracking loss still freezes: a camera problem must never cost the
+    // player, and manual pause is user intent, so both keep priority.
+    if (this.isStumbling() && this.trackingOk) return true;
     if (this.locomotionGating && (!this.locomotionActive || !this.trackingOk)) return false;
     return true;
   }
@@ -818,7 +838,14 @@ export class RunnerEngine implements GameEngine {
       const coin = this.coins[i];
       if (prevDistance < coin.atDistance && this.distance >= coin.atDistance) {
         this.coinDone[i] = true;
-        const grabbed = coin.aerial ? this.jumpY() >= COIN.AERIAL_JUMPY : true;
+        // THE cost of a stumble: you run straight past the mohurs. The plane
+        // is still marked done, so they slide by ungathered rather than
+        // queueing up to be collected once you recover.
+        const grabbed = this.isStumbling()
+          ? false
+          : coin.aerial
+            ? this.jumpY() >= COIN.AERIAL_JUMPY
+            : true;
         if (grabbed) {
           this.coinCollected[i] = true;
           this.coinsCollected += 1;
@@ -834,14 +861,19 @@ export class RunnerEngine implements GameEngine {
     // 4. cue for the nearest unresolved obstacle
     this.updateCue(timestampMs);
 
-    // 5. finish conditions (endless: only the timer or the lives end a run)
+    // 5. finish condition — the TIMER, and nothing else. Missing obstacles
+    // costs a stumble, never the run: every session now plays to the end, so
+    // the scoring formula always sees a complete measurement instead of one
+    // truncated at the player's first mistake.
+    // (A run configured with no timer at all is endless by definition and
+    // ends only when the player quits — the UI always sets one.)
     const timeUp = this.sessionMs > 0 && this.gameTimeMs >= this.sessionMs;
-    if (this.lives <= 0 || timeUp) {
+    if (timeUp) {
       this.phase = 'done';
       this.finalizePendingReps();
-      this.endReason = timeUp ? 'time' : 'lives';
+      this.endReason = 'time';
       this.emit('RUN_DONE', {
-        lives: this.lives,
+        stumbles: this.stumbleCount(),
         resolved: this.resolved.filter(Boolean).length,
         cleared: this.clearedFlags.filter(Boolean).length,
         distance: this.distance,
@@ -931,9 +963,15 @@ export class RunnerEngine implements GameEngine {
     const ob = this.obstacles[i];
     this.resolved[i] = true;
     this.clearedFlags[i] = cleared;
-    if (!cleared) {
-      this.lives -= 1;
+    if (cleared) {
+      this.cleanStreak += 1;
+      if (this.cleanStreak > this.bestStreak) this.bestStreak = this.cleanStreak;
+    } else {
+      // MISS → stumble, never death. Whether this was a miss was decided
+      // upstream by the detection; all that changed here is the consequence.
       this.hitFlashAt = now;
+      this.cleanStreak = 0;
+      this.beginStumble(now);
     }
     if (this.cue?.obstacleId === ob.id) this.cue = null;
     // the "why did I fail that one" log: signal values AT the gate
@@ -941,9 +979,52 @@ export class RunnerEngine implements GameEngine {
       id: ob.id,
       type: ob.type,
       cleared,
-      livesLeft: this.lives,
+      stumbles: this.stumbleCount(),
       ...logData,
     });
+  }
+
+  /**
+   * Trip the runner: ~1.5s during which mohurs pass by uncollected and the
+   * streak is gone. The run continues — there is no fail state.
+   *
+   * Mode-neutral by construction: this is called from finishObstacle, which
+   * is downstream of every control mode, so a missed neck look-up and a
+   * missed body squat cost exactly the same thing.
+   */
+  private beginStumble(now: number): void {
+    this.stumbleUntilGameMs = this.gameTimeMs + STUMBLE.DURATION_MS;
+    // a visible trip: the world keeps scrolling (that is what carries the
+    // mohurs past you), just briefly slower. Existing locomotion accel ramps
+    // it back — no new recovery machinery.
+    this.speedFactor = Math.min(this.speedFactor, STUMBLE.SPEED_FACTOR);
+    // fairness: reuse the resume-grace clamp so a plane reached DURING the
+    // trip can't auto-fail into a second stumble. Releases early if the
+    // player is already performing the correct action.
+    this.resumeGraceUntil = Math.max(
+      this.resumeGraceUntil,
+      now + STUMBLE.DURATION_MS + STUMBLE.GRACE_MS,
+    );
+    this.resumeHoldExtended = false;
+    this.emit('STUMBLE', {
+      total: this.stumbleCount(),
+      ms: STUMBLE.DURATION_MS,
+      streakLost: true,
+    });
+  }
+
+  /** Missed obstacles so far — derived, so there is one source of truth. */
+  private stumbleCount(): number {
+    let n = 0;
+    for (let i = 0; i < this.resolved.length; i++) {
+      if (this.resolved[i] && !this.clearedFlags[i]) n += 1;
+    }
+    return n;
+  }
+
+  /** True while the runner is tripping (collecting disabled). */
+  isStumbling(): boolean {
+    return this.stumbleUntilGameMs > 0 && this.gameTimeMs < this.stumbleUntilGameMs;
   }
 
   private updateCue(now: number): void {
@@ -1766,7 +1847,8 @@ export class RunnerEngine implements GameEngine {
       cameraY: this.cameraYOut,
       cameraPitch: this.cameraPitch,
       fov: this.fov,
-      lives: this.lives,
+      stumbles: this.stumbleCount(),
+      stumbling: this.isStumbling(),
       hitFlashAt: this.hitFlashAt,
       cue: this.cue,
       // WINDOWED for endless mode: per-frame mapping must not grow with the
@@ -1805,7 +1887,7 @@ export class RunnerEngine implements GameEngine {
   getHudMetrics(): HudMetrics {
     return {
       primary: { label: 'Dist', value: `${Math.floor(this.distance)}m` },
-      secondary: { label: 'Lives', value: this.lives },
+      secondary: { label: 'Stumbles', value: this.stumbleCount() },
       repsDisplay: this.squatReps + this.jumpReps,
       cue: this.cue,
       tracking: this.isTracking(),
@@ -1823,8 +1905,8 @@ export class RunnerEngine implements GameEngine {
     return this.phase === 'done';
   }
 
-  /** Why the run ended (null while running) — never infer this from lives. */
-  getEndReason(): 'time' | 'lives' | null {
+  /** Why the run ended (null while running). Only the timer ends a run. */
+  getEndReason(): 'time' | null {
     return this.endReason;
   }
 
@@ -1945,7 +2027,7 @@ export class RunnerEngine implements GameEngine {
     ctx.fillStyle = '#f8fafc';
     ctx.font = '11px monospace';
     ctx.fillText(
-      `d=${this.distance.toFixed(1)} v=${this.speed.toFixed(1)} lives=${this.lives} ${this.driftActive ? 'DRIFT' : ''}`,
+      `d=${this.distance.toFixed(1)} v=${this.speed.toFixed(1)} stumbles=${this.stumbleCount()} ${this.driftActive ? 'DRIFT' : ''}`,
       x0,
       y0 - 8,
     );

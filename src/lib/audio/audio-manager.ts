@@ -18,7 +18,7 @@ export type SfxName =
   | 'coin'
   | 'jump'
   | 'squat'
-  | 'life'
+  | 'stumble'
   | 'gameover'
   | 'countdown'
   | 'go'
@@ -241,9 +241,13 @@ class AudioManager {
         case 'squat':
           this.sweep(420, 240, 0.2, 'sine', 0.16);
           break;
-        case 'life':
-          this.blip(110, 0.22, 'square', 0.22);
-          this.blip(82, 0.28, 'sine', 0.25, 0.02);
+        case 'stumble':
+          // boots losing the trail: a scuff of scree, then the heavier
+          // catch of the body. Grounded and physical, NOT a failure buzzer —
+          // the run carries on, and the sound should say so.
+          this.sweep(520, 180, 0.14, 'triangle', 0.14);
+          this.blip(96, 0.2, 'triangle', 0.2, 0.05);
+          this.blip(62, 0.26, 'sine', 0.16, 0.09);
           break;
         case 'gameover':
           this.blip(392, 0.22, 'triangle', 0.2);

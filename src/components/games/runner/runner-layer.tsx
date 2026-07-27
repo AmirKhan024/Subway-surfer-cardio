@@ -34,8 +34,8 @@ function sfxForEvent(e: EngineEvent): SfxName | null {
       return 'jump';
     case 'SQUAT_START':
       return 'squat';
-    case 'OBSTACLE':
-      return e.data.cleared === false ? 'life' : null;
+    case 'STUMBLE':
+      return 'stumble';
     case 'RUN_DONE':
       return 'gameover';
     default:
@@ -80,7 +80,7 @@ export interface RunnerLayerProps {
   /** active-workout session length in seconds (game-clock time) */
   sessionSec?: number;
   debug?: boolean;
-  onComplete: (raw: RunnerRawData, reason: 'time' | 'lives' | null) => void;
+  onComplete: (raw: RunnerRawData, reason: 'time' | null) => void;
   onExit: () => void;
   /** pause-menu Restart → fresh run, same settings, rotated seed */
   onRestart: () => void;
@@ -388,10 +388,15 @@ export default function RunnerLayer({
         // transform/opacity only, skipped under prefers-reduced-motion.
         // (The old fullscreen conic-gradient caused the head-mode lag; body
         // mode now uses cheap edge bars, head mode an opacity-only vignette.)
-        // damage cue — all modes (a hit is a hit in pose OR head mode)
-        const obstacleHit = e.tag === 'OBSTACLE' && e.data.cleared === false;
+        // stumble cue — all modes (a trip is a trip in pose OR head mode).
+        // The SOUND and the 1.5s cost land for everyone including
+        // reduced-motion users; only the screen movement is gated below.
+        const stumbled = e.tag === 'STUMBLE';
         if (!reducedFx) {
-          if (obstacleHit) setFxHit(now);
+          if (stumbled) {
+            setFxHit(now);
+            setFxDust(now); // scuffed grit as the boot skids
+          }
           if (controlMode === 'pose') {
             if (e.tag === 'JUMP_TRIGGER') setFxJump(now);
             if (e.tag === 'LAND') setFxDust(now);
@@ -467,7 +472,7 @@ export default function RunnerLayer({
         const m = engine.getHudMetrics();
         setHud({
           distance: s.distance,
-          lives: s.lives,
+          stumbles: s.stumbles,
           cleared: (m.cleared as number) ?? 0,
           cue: s.cue,
           lowImpact: s.lowImpact,

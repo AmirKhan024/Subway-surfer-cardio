@@ -1,14 +1,13 @@
 'use client';
 
 /**
- * Game-over beat between playing and the report — quick and encouraging.
- * Two states: Run Complete (cleared the whole course) vs Out of lives.
- * Punchy stats only; the breakdown lives on the report screen.
+ * Arrival beat between playing and the report — quick and warm.
+ * ONE state: every run reaches the plateau (a miss stumbles the runner, it
+ * never ends the run). Punchy stats only; the breakdown is on the report.
  * Diagnostics widgets render only under ?debug=1.
  */
-import { HeartCrack, Hourglass, Trophy } from 'lucide-react';
+import { Sunrise } from 'lucide-react';
 import type { RunnerRawData } from '@/types/raw-data';
-import { COURSE } from './runner-constants';
 import { CopyDiagnosticsButton, LogsPanel } from './diagnostics-widgets';
 import { gameOverCopy, type EndReason } from './gameover-copy';
 import { BackButton, MuteButton } from './screen-chrome';
@@ -45,26 +44,17 @@ export default function GameOverScreen({
   debug?: boolean;
 }) {
   const copy = gameOverCopy(reason);
-  const livesLeft = Math.max(0, COURSE.LIVES - raw.obstaclesFailed);
 
   return (
     <main className="relative flex min-h-[100dvh] items-center justify-center p-4">
       <BackButton onClick={onHome} />
       <MuteButton />
       <div className="w-full max-w-md rounded-glass border border-brass/15 bg-teak-deep/90 p-8 text-center shadow-glass">
-        {copy.tone === 'win' ? (
-          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-brass/50 bg-brass/10 shadow-[0_0_40px_rgba(245,197,66,0.35)]">
-            {reason === 'time' ? (
-              <Hourglass className="h-10 w-10 text-brass-light" />
-            ) : (
-              <Trophy className="h-10 w-10 text-brass-light" />
-            )}
-          </div>
-        ) : (
-          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-copper/30 bg-teak/70 shadow-[0_0_28px_rgba(184,115,51,0.18)]">
-            <HeartCrack className="h-10 w-10 text-copper-light" />
-          </div>
-        )}
+        {/* one outcome only: you reached the plateau. There is no fail
+            state to badge any more. */}
+        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-brass/50 bg-brass/10 shadow-[0_0_40px_rgba(245,197,66,0.35)]">
+          <Sunrise className="h-10 w-10 text-brass-light" />
+        </div>
         <h1 className="mt-4 font-heading text-4xl font-black text-brass-pale">{copy.title}</h1>
         <p className="mt-2 text-sm text-brass-pale/70">{copy.sub}</p>
 
@@ -74,10 +64,12 @@ export default function GameOverScreen({
           <BigStat label="Cleared" value={`${raw.obstaclesCleared}`} />
         </div>
 
-        <div className="mt-4 text-lg">
-          <span className="text-[#E2664A]">{'♥'.repeat(livesLeft)}</span>
-          <span className="text-teak-light">{'♥'.repeat(COURSE.LIVES - livesLeft)}</span>
-        </div>
+        {/* stumbles as a plain fact of the trail, never as a verdict */}
+        <p className="mt-4 text-sm text-brass-pale/50">
+          {raw.obstaclesFailed === 0
+            ? 'Not one stumble the whole way down.'
+            : `${raw.obstaclesFailed} stumble${raw.obstaclesFailed === 1 ? '' : 's'} on the trail — you carried on each time.`}
+        </p>
 
         <div className="mt-7 flex gap-3">
           <button

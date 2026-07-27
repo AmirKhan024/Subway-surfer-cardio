@@ -181,9 +181,8 @@ export default function ReportScreen({
 
         {/* the arrival — flavour only; every number below is unchanged */}
         <p className="mt-1.5 text-sm text-brass-pale/55">
-          {reason === 'lives'
-            ? 'The valley keeps what it takes. The Kosha is still yours — the light is still ahead.'
-            : 'You crest the Dong plateau with the sun full on your face. The Kosha comes off your back and opens.'}
+          You crest the Dong plateau with the sun full on your face. The Kosha
+          comes off your back and opens.
         </p>
 
         {/* muscle-age hero */}

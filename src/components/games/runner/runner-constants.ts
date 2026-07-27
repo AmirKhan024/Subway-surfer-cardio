@@ -237,12 +237,38 @@ export const COURSE = {
   EXTRA_GAP_S: 1.0,
   /** obstacle telegraph window, seconds-to-plane */
   CUE_WINDOW_S: 2.0,
-  LIVES: 3,
   /** fixed seed for the first (assessment) run of a session */
   ASSESSMENT_SEED: 1337,
   /** matched-difficulty pool for "Run again" replays (course memorization
    *  would otherwise inflate scores across attempts) */
   SEED_POOL: [1337, 2861, 4242, 7351, 9090],
+} as const;
+
+// ── Stumble (the consequence of a miss — NOT detection) ──────────────────
+/**
+ * Missing an obstacle makes the runner stumble; it never ends the run.
+ *
+ * Rationale (design doc): "An assessment that stops collecting data the
+ * moment the user makes their first mistake is worthless as an assessment,
+ * and a 62-year-old who gets three seconds in before being sent to a start
+ * screen will not come back." The run now always plays to the timer, so the
+ * scoring formula always sees a complete measurement.
+ *
+ * NOTE: nothing in here feeds movement detection. Whether an obstacle was
+ * cleared or missed is still decided entirely by DETECT/HEAD/LOCO — this
+ * block only says what HAPPENS afterwards.
+ */
+export const STUMBLE = {
+  /** how long the trip lasts — the real cost is the collecting you lose */
+  DURATION_MS: 1500,
+  /** extra fairness window after the trip before a plane may be failed again,
+   *  so one stumble can never chain into the next (gaps are ≥2.6s, so this
+   *  is rare — but it must not be possible) */
+  GRACE_MS: 400,
+  /** speedFactor is dipped to this for the trip, then the existing
+   *  locomotion accel ramps it back — the world keeps scrolling throughout,
+   *  which is what carries the mohurs past you ungathered */
+  SPEED_FACTOR: 0.72,
 } as const;
 
 // ── Coins (engagement ONLY — never enter the KR1 scoring bands) ──────────

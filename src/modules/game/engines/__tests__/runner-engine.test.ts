@@ -23,6 +23,7 @@ import {
   LOCO,
   JUICE,
   CAMERA,
+  STUMBLE,
 } from '@/components/games/runner/runner-constants';
 import type { NormalizedLandmark } from '../types';
 import { LM } from '../types';
@@ -241,10 +242,11 @@ describe('engine purity — audio never enters the engine', () => {
   });
 });
 
-// ── keyboard mode: world sim, gates, lives ─────────────────────────────────
+// ── keyboard mode: world sim, gates, stumbles ──────────────────────────────
 
 /** Perfect-player bot: squat on beam cues, jump near hurdle planes.
- *  Endless mode: a 60s session bounds every bot run (lives may end sooner). */
+ *  Endless mode: a 60s session bounds every bot run — and since a miss only
+ *  stumbles the runner, the timer is now the ONLY thing that ends one. */
 function runKeyboardBot(
   engine: RunnerEngine,
   behavior: 'perfect' | 'idle',
@@ -277,29 +279,102 @@ describe('RunnerEngine — keyboard mode', () => {
     expect(engine.processCalibration([]).isReady).toBe(true);
   });
 
-  it('perfect play survives the full session with 3 lives intact (endless)', () => {
+  it('perfect play runs the full session with zero stumbles (endless)', () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
     runKeyboardBot(engine, 'perfect');
     expect(engine.isComplete()).toBe(true);
-    expect(engine.getEndReason()).toBe('time'); // never 'lives' for a perfect run
+    expect(engine.getEndReason()).toBe('time'); // the only end reason there is
     const raw = engine.getRawData();
     expect(raw.obstaclesCleared).toBeGreaterThanOrEqual(15); // ~60s of obstacles
     expect(raw.obstaclesFailed).toBe(0);
-    expect(engine.getSceneState().lives).toBe(3);
+    expect(engine.getSceneState().stumbles).toBe(0);
     expect(raw.distance).toBeGreaterThan(0);
     expect(raw.controlModeKeyboard).toBe(1);
   });
 
-  it('standing idle burns exactly 3 lives then ends the run', () => {
+  it('standing idle stumbles repeatedly but STILL plays to the timer', () => {
+    // the whole point of the stumble model: an assessment that stops
+    // collecting at the user's first mistake is worthless as an assessment
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
     runKeyboardBot(engine, 'idle');
     expect(engine.isComplete()).toBe(true);
+    expect(engine.getEndReason()).toBe('time'); // NOT a fail-out
     const raw = engine.getRawData();
-    expect(raw.obstaclesFailed).toBe(3);
     expect(raw.obstaclesCleared).toBe(0);
-    expect(engine.getSceneState().lives).toBe(0);
-    // remaining obstacles stay unresolved
-    expect(raw.obstaclesCleared + raw.obstaclesFailed).toBeLessThan(raw.obstaclesTotal);
+    // far more than the old 3-life cap — the run never got cut short
+    expect(raw.obstaclesFailed).toBeGreaterThan(3);
+    expect(engine.getSceneState().stumbles).toBe(raw.obstaclesFailed);
+  });
+
+  it('a miss emits STUMBLE and never ends the run', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    // idle straight through the first obstacle
+    for (let i = 0; i < 400; i++) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    const stumbles = engine.drainEvents().filter((e) => e.tag === 'STUMBLE');
+    expect(stumbles.length).toBeGreaterThan(0);
+    expect(stumbles[0].data.streakLost).toBe(true);
+    expect(engine.isComplete()).toBe(false); // still running after a miss
+    expect(engine.getEndReason()).toBe(null);
+  });
+
+  it('collecting is disabled for the stumble window, then resumes', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    // run idle until the first miss trips the runner
+    while (!engine.isStumbling() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    expect(engine.isStumbling()).toBe(true);
+    const atTripStart = engine.getSceneState().coinsCollected;
+    // no mohur may be banked for as long as the trip lasts
+    while (engine.isStumbling() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+      // the frame that ENDS the trip may legitimately collect again — only
+      // assert on frames that were wholly inside it
+      if (engine.isStumbling()) {
+        expect(engine.getSceneState().coinsCollected).toBe(atTripStart);
+      }
+    }
+    expect(engine.isStumbling()).toBe(false); // recovers on its own
+
+    // ...and collecting genuinely comes back, so the check above is not
+    // vacuously passing on a stretch of trail that simply had no mohurs
+    while (engine.getSceneState().coinsCollected === atTripStart && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    expect(engine.getSceneState().coinsCollected).toBeGreaterThan(atTripStart);
+  });
+
+  it('the game clock keeps running through a stumble (the trip must cost time)', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    while (!engine.isStumbling() && t < 40_000) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    const before = engine.getTimerRemainingMs() ?? 0;
+    const end = t + STUMBLE.DURATION_MS;
+    while (t < end) {
+      t += FRAME_MS;
+      engine.processFrame([], t);
+    }
+    const after = engine.getTimerRemainingMs() ?? 0;
+    // the clock burned roughly the stumble duration — NOT frozen by the
+    // locomotion gate just because the runner broke stride
+    expect(before - after).toBeGreaterThan(STUMBLE.DURATION_MS * 0.7);
   });
 
   it('perfect run works on every pool seed (matched difficulty)', () => {
@@ -1042,7 +1117,7 @@ describe('RunnerEngine — diagnostic events', () => {
       expect(ob.data.cleared).toBe(true);
       expect(typeof ob.data.crouchAtGate).toBe('number');
       expect(typeof ob.data.jumpYAtGate).toBe('number');
-      expect(typeof ob.data.livesLeft).toBe('number');
+      expect(typeof ob.data.stumbles).toBe('number');
     }
     const reps = events.filter((e) => e.tag === 'REP');
     expect(reps.length).toBeGreaterThanOrEqual(15);
@@ -1056,7 +1131,8 @@ describe('RunnerEngine — diagnostic events', () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
     runKeyboardBot(engine, 'idle');
     const obstacles = engine.drainEvents().filter((e) => e.tag === 'OBSTACLE');
-    expect(obstacles).toHaveLength(3); // 3 lives burned
+    // no 3-miss cap any more — the idle bot stumbles its way to the timer
+    expect(obstacles.length).toBeGreaterThan(3);
     for (const ob of obstacles) {
       expect(ob.data.cleared).toBe(false);
       expect(ob.data.crouchAtGate).toBe(0);
@@ -1184,10 +1260,10 @@ describe('RunnerEngine — game clock (runActive gate + pause + session timer)',
     }
     expect(engine.isComplete()).toBe(true);
     expect(reasons).toContain('time');
-    // REGRESSION (playtest): the end reason is 'time' while ALL lives remain —
-    // the UI must never infer "Out of lives" from anything but this reason
+    // REGRESSION (playtest): the end reason is always 'time' — the UI must
+    // never infer a failure state, because there is no longer one to infer
     expect(engine.getEndReason()).toBe('time');
-    expect(engine.getSceneState().lives).toBe(3);
+    expect(engine.getSceneState().stumbles).toBe(0);
     const raw = engine.getRawData();
     expect(raw.elapsed).toBeGreaterThanOrEqual(2000);
     // 2s at ~6m/s ≈ 12m — before the 30m lead-in ends, so no obstacle resolved
