@@ -52,12 +52,24 @@ type DawnStop = {
   sunY: number;
 };
 const DAWN: DawnStop[] = [
-  { p: 0.0, sky: 0x10162e, sunC: 0x1a2338, sunI: 0.1, ambC: 0x27324f, ambI: 0.3, sunY: -8 },
-  { p: 0.35, sky: 0x2b3a4e, sunC: 0x54646f, sunI: 0.5, ambC: 0x4a5a66, ambI: 0.62, sunY: -2 },
-  { p: 0.6, sky: 0x4a5a66, sunC: 0x9b8b78, sunI: 0.9, ambC: 0x6f7a84, ambI: 0.88, sunY: 6 },
-  { p: 0.75, sky: 0xe8913a, sunC: 0xffb066, sunI: 1.7, ambC: 0xc98a5a, ambI: 1.08, sunY: 22 },
-  { p: 0.9, sky: 0xf5c542, sunC: 0xffd98a, sunI: 2.2, ambC: 0xe8c07a, ambI: 1.3, sunY: 32 },
-  { p: 1.0, sky: 0xf2f4f0, sunC: 0xffffff, sunI: 2.4, ambC: 0xdfe7ee, ambI: 1.5, sunY: 40 },
+  // NIGHT — held. Light tints stay COOL blue-grey on purpose: the trail
+  // texture is warm gravel, and a warm key light this early made the whole
+  // ground read amber long before the sun was meant to clear the ridge.
+  // ambI never drops below ~0.34 — the obstacles must stay readable in the
+  // dark or a missed cue costs a real life (this game is also an assessment).
+  { p: 0.0, sky: 0x10162e, sunC: 0x1b2742, sunI: 0.12, ambC: 0x2b3a52, ambI: 0.34, sunY: -10 },
+  { p: 0.45, sky: 0x141b33, sunC: 0x24304d, sunI: 0.18, ambC: 0x30405e, ambI: 0.4, sunY: -8 },
+  // FIRST LIGHT
+  { p: 0.6, sky: 0x2b3a4e, sunC: 0x53637a, sunI: 0.42, ambC: 0x4a5a6e, ambI: 0.55, sunY: -4 },
+  // pre-dawn violet. Without this stop the blue→saffron lerp passes straight
+  // through a muddy grey-brown; real dawn goes indigo → rose → orange.
+  { p: 0.68, sky: 0x6b4a5e, sunC: 0x9c6a72, sunI: 0.8, ambC: 0x6d5566, ambI: 0.74, sunY: 4 },
+  // SUNRISE — the rim clears the ridge here, in the last quarter
+  { p: 0.75, sky: 0xe8913a, sunC: 0xffb066, sunI: 1.35, ambC: 0xbe8a62, ambI: 0.95, sunY: 20 },
+  { p: 0.9, sky: 0xf5c542, sunC: 0xffd07a, sunI: 1.75, ambC: 0xdcb679, ambI: 1.2, sunY: 31 },
+  // FINISH — warm gold, intensity CAPPED. Not white: an over-exposed cream
+  // frame throws away the payoff the whole ramp was built for.
+  { p: 1.0, sky: 0xffcb5c, sunC: 0xffdf9a, sunI: 1.95, ambC: 0xf0c98a, ambI: 1.35, sunY: 40 },
 ];
 /** hard translucent green of the Lohit — NOT blue, NOT plains-brown */
 const LOHIT_GREEN = 0x1e7a5e;
@@ -190,11 +202,12 @@ export class RunnerScene {
     // recycled trailside props. Counts and x/z placement are kept from the
     // city build so the draw count does not grow — only the art changed.
     // (part counts per prop are LOWER than the city's, see the factories)
-    const lampWindows = makeWindowTexture(0x2a2620, 0xffcf6a); // butter-lamp glow
     for (let i = 0; i < 14; i++) {
       const side = i % 2 === 0 ? -1 : 1;
-      // every 4th slope prop is a gonpa/house — the only lit thing in the dark
-      const b = i % 4 === 3 ? makeGonpa(i, lampWindows) : makePine(i);
+      // ONE gonpa per loop as a landmark; the rest is pine slope and cane.
+      // (an earlier build put a lit-window block every 4th prop, which read
+      // as a city skyline — the whole thing this re-skin exists to remove)
+      const b = i === 9 ? makeGonpa() : i % 3 === 1 ? makeBamboo(i) : makePine(i);
       b.position.x = side * (ROAD_W / 2 + 10 + (i % 4) * 3);
       this.addProp(b, (i / 14) * LOOP_LEN);
     }
@@ -216,13 +229,19 @@ export class RunnerScene {
 
     // the ridge line — one SHARED material so the dawn ramp tints all ten
     // peaks with a single write per frame
-    this.ridgeMat = new THREE.MeshBasicMaterial({ color: 0x0b1020 });
+    // fog:false is load-bearing — the ridge sits at z=-130, well beyond
+    // FOG_FAR (95), so with fog on it dissolves completely into the sky and
+    // the sunrise has no ridge to clear. (The old city skyline silhouettes
+    // had the same problem and were effectively invisible geometry.)
+    this.ridgeMat = new THREE.MeshBasicMaterial({ color: 0x0b1020, fog: false });
     for (let i = 0; i < 10; i++) {
+      // BROAD and low — a peak that is taller than it is wide just reads as
+      // another pine at this distance. Mountains are wide.
       const peak = new THREE.Mesh(
-        new THREE.ConeGeometry(9 + (i % 4) * 4, 26 + (i % 5) * 12, 4),
+        new THREE.ConeGeometry(18 + (i % 4) * 9, 20 + (i % 5) * 9, 4),
         this.ridgeMat,
       );
-      peak.position.set(-70 + i * 16, 9, -130);
+      peak.position.set(-78 + i * 18, 4, -130);
       peak.rotation.y = Math.PI / 4;
       this.scene.add(peak);
     }
@@ -550,24 +569,8 @@ function flagTexture(): THREE.CanvasTexture {
   return flagTex;
 }
 
-function makeWindowTexture(base: number, lit: number): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = 64;
-  c.height = 128;
-  const g = c.getContext('2d')!;
-  g.fillStyle = `#${base.toString(16).padStart(6, '0')}`;
-  g.fillRect(0, 0, 64, 128);
-  for (let y = 6; y < 122; y += 14) {
-    for (let x = 6; x < 58; x += 12) {
-      g.fillStyle =
-        Math.random() > 0.45
-          ? `#${lit.toString(16).padStart(6, '0')}`
-          : 'rgba(12,18,30,0.9)';
-      g.fillRect(x, y, 7, 9);
-    }
-  }
-  return new THREE.CanvasTexture(c);
-}
+// (the tiled lit-window facade texture that used to live here is gone with
+// the city — the gonpa's two butter-lamp windows are plain quads now)
 
 /**
  * JUMP obstacle: a fallen pine log across the trail.
@@ -679,27 +682,66 @@ function makePine(i: number): THREE.Object3D {
 }
 
 /**
- * Gonpa (monastery) / village house. Basic-material so its butter-lamp
- * windows stay lit through the dark opening of the run — with the prayer
- * flags, these are the only saturated things in the first third of the level.
+ * Gonpa (monastery) — a LANDMARK, one per recycling loop, not a skyline.
+ *
+ * The previous version of this was a box wearing a tiled lit-window texture
+ * plus a flat roof slab, which rendered as a grey apartment block and read as
+ * "the city is still here". The silhouette is what makes a gonpa: a tiered
+ * base, a wide OVERHANGING sloped roof, and a finial. Basic-material
+ * throughout so it stays a silhouette against the sky like the ridge peaks,
+ * with two small warm windows — with the prayer flags, the only saturated
+ * things in the dark opening of the run.
  */
-function makeGonpa(i: number, windowTex: THREE.CanvasTexture): THREE.Object3D {
+function makeGonpa(): THREE.Object3D {
   const group = new THREE.Group();
-  const w = 6 + (i % 3) * 3;
-  const h = 8 + ((i * 7) % 14);
-  const bodyH = h * 0.6;
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(w, bodyH, 6),
-    new THREE.MeshBasicMaterial({ map: windowTex }),
-  );
-  body.position.y = bodyH / 2;
-  group.add(body);
+  const wallMat = new THREE.MeshBasicMaterial({ color: 0x241f1a });
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(9, 4, 7), wallMat);
+  base.position.y = 2;
+  group.add(base);
+
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(6, 3.2, 5), wallMat);
+  upper.position.y = 5.6;
+  group.add(upper);
+
+  // the overhang is the tell — 4-sided cone, wider than the storey it caps
   const roof = new THREE.Mesh(
-    new THREE.BoxGeometry(w * 1.25, h * 0.12, 7),
+    new THREE.ConeGeometry(6.4, 2.6, 4),
     new THREE.MeshBasicMaterial({ color: 0x6b2f22 }),
   );
-  roof.position.y = bodyH + h * 0.06;
+  roof.position.y = 8.5;
+  roof.rotation.y = Math.PI / 4;
   group.add(roof);
+
+  const finial = new THREE.Mesh(
+    new THREE.ConeGeometry(0.35, 1.2, 6),
+    new THREE.MeshBasicMaterial({ color: 0xd9a441 }),
+  );
+  finial.position.y = 10.3;
+  group.add(finial);
+
+  // butter-lamp windows — a couple of warm points, never a tiled facade
+  const lampMat = new THREE.MeshBasicMaterial({ color: 0xffcf6a });
+  for (const x of [-1.6, 1.6]) {
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.9), lampMat);
+    win.position.set(x, 5.4, 2.55);
+    group.add(win);
+  }
+  return group;
+}
+
+/** Cane/bamboo clump — thin tapered culms sharing one material. */
+function makeBamboo(i: number): THREE.Object3D {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color: 0x5c6b34 });
+  const culms = 3 + (i % 2);
+  for (let c = 0; c < culms; c++) {
+    const h = 5 + ((i + c * 3) % 5);
+    const culm = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.16, h, 5), mat);
+    culm.position.set((c - culms / 2) * 0.55, h / 2, (c % 2) * 0.5);
+    culm.rotation.z = (c % 2 === 0 ? 1 : -1) * 0.06 * (c + 1);
+    group.add(culm);
+  }
   return group;
 }
 
