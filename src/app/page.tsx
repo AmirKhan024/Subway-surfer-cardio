@@ -138,6 +138,27 @@ export default function Home() {
   const [endReason, setEndReason] = useState<'time' | null>(null);
   // ?debug OR localStorage.KR_DEBUG='1' — one gate (run-logger.isDebug)
   const [debug] = useState(() => isDebug());
+  /**
+   * Frame-capture hook (dev tooling only). `?debug&kbd=1[&sec=90]` boots
+   * straight into a keyboard-mode run — no camera, no calibration — so
+   * scripts/capture-frames.mjs can screenshot the world and the HUD headlessly
+   * and read FRAME_STATS off the console.
+   *
+   * Keyboard is the engine's test-only input path (see profile.ts) and there
+   * is no key listener, so the runner simply runs the course to the timer.
+   * That is exactly what an ART capture wants: every act, prop, coin and HUD
+   * element renders on the real pipeline. It proves nothing about detection.
+   *
+   * Gated behind isDebug(), and set in an effect so SSR still renders the
+   * home screen and hydration stays clean.
+   */
+  const [captureSec, setCaptureSec] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isDebug()) return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('kbd') !== '1') return;
+    setCaptureSec(Number(q.get('sec')) || 90);
+  }, []);
 
   useEffect(() => {
     installErrorCapture();
@@ -202,6 +223,24 @@ export default function Home() {
       {node}
     </div>
   );
+
+  // dev frame-capture run — see captureSec above
+  if (captureSec !== null) {
+    return (
+      <RunnerLayer
+        controlMode="keyboard"
+        lowImpact={false}
+        seed={seedForAttempt(0)}
+        bobScale={0.4}
+        sessionSec={captureSec}
+        debug
+        onComplete={() => undefined}
+        onExit={() => undefined}
+        onRestart={() => undefined}
+        onQuit={() => undefined}
+      />
+    );
+  }
 
   if (screen === 'playing' && profile) {
     return (
