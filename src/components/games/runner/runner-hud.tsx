@@ -219,7 +219,13 @@ function StreakPips({
   return (
     <div
       key={sealed}
-      className="flex items-center gap-[3px] rounded-lg border border-brass/25 bg-teak-deep/70 px-1.5 py-1 backdrop-blur-md motion-safe:animate-cue-pop"
+      // its own surface rather than CHIP_SHELL: the studs need a DARK socket
+      // plate behind them (a teak gradient would wash the unlit rims out), and
+      // that means no gradient — same border and bevel language, flat backing.
+      className="inline-flex h-[18px] items-center justify-center gap-[3px] rounded-[10px]
+                 border border-brass/40 bg-black/45 px-2 backdrop-blur-md
+                 shadow-[inset_0_1px_2px_rgba(0,0,0,0.55),0_4px_16px_0_rgba(15,23,42,0.25)]
+                 motion-safe:animate-cue-pop"
       title={`Clean streak — ${target} in a row seals a Kosha`}
       aria-label={`Clean streak ${streak} of ${target}`}
     >
@@ -228,12 +234,20 @@ function StreakPips({
         return (
           <span
             key={i}
-            className="h-1.5 w-1.5 rounded-full transition-[background-color,box-shadow] duration-200"
+            className="h-[7px] w-[7px] rounded-full transition-[background,box-shadow] duration-200"
             style={{
-              // brass tokens as literals: Tailwind can't compose a
-              // runtime-conditional arbitrary box-shadow
-              background: lit ? '#E8C46A' : 'rgba(201, 162, 39, 0.22)',
-              boxShadow: lit ? '0 0 5px rgba(232,196,106,0.75)' : 'none',
+              // brass tokens as literals — Tailwind can't compose a
+              // runtime-conditional arbitrary gradient or box-shadow.
+              // LIT: an off-centre highlight domes the disc into a brass stud.
+              // UNLIT: an inset top shadow sinks it, and the 0-blur spread ring
+              // is the visible empty rim — so "not filled yet" reads at a
+              // glance instead of vanishing into the chip.
+              background: lit
+                ? 'radial-gradient(circle at 34% 28%, #F7EBC4 0%, #E8C46A 52%, #A8842A 100%)'
+                : 'rgba(0,0,0,0.42)',
+              boxShadow: lit
+                ? '0 0 6px rgba(232,196,106,0.85), inset 0 -1px 1px rgba(0,0,0,0.40)'
+                : 'inset 0 1px 2px rgba(0,0,0,0.70), 0 0 0 1px rgba(201,162,39,0.50)',
             }}
           />
         );
@@ -354,6 +368,13 @@ function ActChip({ act }: { act: ActId }) {
   );
 }
 
+/** cast brass, lit from the upper-left — the cue's bezel and nothing else */
+const BEZEL: React.CSSProperties = {
+  background: 'linear-gradient(150deg, #F2DFA6 0%, #C9A227 45%, #8A6F1E 100%)',
+  boxShadow:
+    '0 0 0 1px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 16px rgba(15,23,42,0.35)',
+};
+
 export function ActionCue({
   cue,
   lowImpact,
@@ -373,20 +394,27 @@ export function ActionCue({
   const iconSrc = getReadyCueImage(mode, isJump ? 'up' : 'down');
   return (
     <div className="flex flex-col items-center gap-1.5 transition-opacity duration-150">
+      {/* brass bezel — a struck ring the cue sits in. The cue-COLOUR border
+          stays inside it: saffron/frost is how the action is read, and that
+          coding is not decoration. Skin only; nothing here is timing. */}
       {iconSrc ? (
-        <img
-          src={iconSrc}
-          alt=""
-          draggable={false}
-          className="h-20 w-20 rounded-full border-2 bg-teak-deep/80 object-cover backdrop-blur-md"
-          style={{ borderColor: color }}
-        />
+        <div className="rounded-full p-[3px]" style={BEZEL}>
+          <img
+            src={iconSrc}
+            alt=""
+            draggable={false}
+            className="h-20 w-20 rounded-full border-2 bg-teak-deep/80 object-cover backdrop-blur-md"
+            style={{ borderColor: color }}
+          />
+        </div>
       ) : (
-        <div
-          className="flex h-16 w-16 items-center justify-center rounded-2xl border-2 bg-teak-deep/80 text-3xl backdrop-blur-md"
-          style={{ borderColor: color, color }}
-        >
-          {icon}
+        <div className="rounded-[1.1rem] p-[3px]" style={BEZEL}>
+          <div
+            className="flex h-16 w-16 items-center justify-center rounded-2xl border-2 bg-teak-deep/80 text-3xl backdrop-blur-md"
+            style={{ borderColor: color, color }}
+          >
+            {icon}
+          </div>
         </div>
       )}
       <div className="text-sm font-bold tracking-widest" style={{ color }}>
