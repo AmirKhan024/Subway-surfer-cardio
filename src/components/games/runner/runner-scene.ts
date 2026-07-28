@@ -97,7 +97,7 @@ export class RunnerScene {
   private camera: THREE.PerspectiveCamera;
   private road!: THREE.Mesh;
   private roadTex!: THREE.CanvasTexture;
-  private clouds: THREE.Mesh[] = [];
+  private mistPuffs: THREE.Mesh[] = [];
   // ── dawn-ramp refs (written once per frame by applyDawn; nothing allocated)
   private sunLight!: THREE.DirectionalLight;
   private ambLight!: THREE.AmbientLight;
@@ -198,12 +198,26 @@ export class RunnerScene {
       opacity: 0.3,
       fog: false,
     });
-    for (let i = 0; i < 6; i++) {
-      const mist = new THREE.Mesh(new THREE.SphereGeometry(4 + (i % 3) * 2, 8, 6), this.mistMat);
-      mist.scale.set(3.2, 0.35, 1);
-      mist.position.set(-50 + i * 22, 5 + (i % 2) * 3, -70 - (i % 3) * 22);
+    // TWO depth bands, not one flat sheet. Layers at different distances and
+    // heights parallax against each other as the world scrolls, which is what
+    // turns a backdrop into a valley — and it is free, because the existing
+    // drift loop already moves however many of these there are.
+    for (let i = 0; i < 8; i++) {
+      const far = i < 4;
+      const r = far ? 6 + (i % 3) * 2 : 3 + (i % 3);
+      const mist = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), this.mistMat);
+      mist.scale.set(far ? 3.6 : 2, far ? 0.32 : 0.2, 1);
+      // the near band is kept OUT past ~60m and deliberately small. These are
+      // big transparent blobs and their cost is fill rate, not draw calls —
+      // pulled in close they covered a third of the screen in blending and
+      // measurably tripled the dropped-frame count.
+      mist.position.set(
+        -52 + (i % 4) * 26 + (far ? 0 : 11),
+        far ? 6 + (i % 2) * 3 : 2.4 + (i % 2) * 1.1,
+        far ? -96 - (i % 3) * 16 : -62 - (i % 3) * 9,
+      );
       this.scene.add(mist);
-      this.clouds.push(mist);
+      this.mistPuffs.push(mist);
     }
 
     // road (UV-scrolled canvas texture — cheapest possible scroll)
@@ -288,14 +302,25 @@ export class RunnerScene {
     // FOG_FAR (95), so with fog on it dissolves completely into the sky and
     // the sunrise has no ridge to clear. (The old city skyline silhouettes
     // had the same problem and were effectively invisible geometry.)
-    this.ridgeMat = new THREE.MeshBasicMaterial({ color: 0x0b1020, fog: false });
+    // vertexColors is what gives the range FORM instead of a flat paper cut-out.
+    // ONLY the ten peaks below may use this material: anything else sharing it
+    // without a baked colour attribute would render black.
+    this.ridgeMat = new THREE.MeshBasicMaterial({
+      color: 0x0b1020,
+      fog: false,
+      vertexColors: true,
+    });
     for (let i = 0; i < 10; i++) {
       // BROAD and low — a peak that is taller than it is wide just reads as
       // another pine at this distance. Mountains are wide.
-      const peak = new THREE.Mesh(
-        new THREE.ConeGeometry(18 + (i % 4) * 9, 20 + (i % 5) * 9, 4),
-        this.ridgeMat,
-      );
+      const peakGeo = new THREE.ConeGeometry(18 + (i % 4) * 9, 20 + (i % 5) * 9, 4);
+      // bottom > top on purpose. Real atmospheric perspective hazes a distant
+      // range's BASE toward the sky and darkens its summit, so with the
+      // per-frame `cSky * 0.32` the foot resolves to ~cSky*0.82 (it dissolves
+      // into the sky) and the summit to ~cSky*0.25 (darker than the old flat
+      // 0.32). Softer silhouettes AND more depth, from one baked attribute.
+      bakeVerticalGradient(peakGeo, 2.55, 0.78);
+      const peak = new THREE.Mesh(peakGeo, this.ridgeMat);
       peak.position.set(-78 + i * 18, 4, -130);
       peak.rotation.y = Math.PI / 4;
       this.scene.add(peak);
@@ -555,9 +580,9 @@ export class RunnerScene {
       }
     }
 
-    // clouds drift slowly
-    for (let i = 0; i < this.clouds.length; i++) {
-      this.clouds[i].position.x += Math.sin(nowMs / 9000 + i) * 0.005;
+    // mist drifts slowly
+    for (let i = 0; i < this.mistPuffs.length; i++) {
+      this.mistPuffs[i].position.x += Math.sin(nowMs / 9000 + i) * 0.005;
     }
 
     // obstacles + coins (positioned on the smoothed scroll via lagOffset)
@@ -860,6 +885,38 @@ function disposeObject(obj: THREE.Object3D): void {
   else if (mat) mat.dispose();
 }
 
+/**
+ * Bake a vertical gradient into a geometry as a colour attribute.
+ *
+ * Why this and not a gradient texture or a shader: three multiplies the vertex
+ * colour into the material colour (`diffuseColor.rgb *= vColor`), so a material
+ * that is RECOLOURED EVERY FRAME — ridgeMat is `cSky * 0.32` — keeps working
+ * untouched and the gradient just rides on top. It costs one Float32Array at
+ * build time, nothing per frame, no texture fetch, no custom shader, and it
+ * works on Basic and Lambert alike.
+ *
+ * Values above 1 are legal and deliberate: they let a silhouette's base push
+ * back TOWARD the sky colour (atmospheric haze) without a second material.
+ *
+ * NOTE: `vertexColors: true` on a material means every mesh using that material
+ * needs a colour attribute, or it renders black.
+ */
+function bakeVerticalGradient(geo: THREE.BufferGeometry, bottom: number, top: number): void {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox!;
+  const span = Math.max(1e-6, bb.max.y - bb.min.y);
+  const col = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const t = (pos.getY(i) - bb.min.y) / span;
+    const v = bottom + (top - bottom) * t;
+    col[i * 3] = v;
+    col[i * 3 + 1] = v;
+    col[i * 3 + 2] = v;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+}
+
 // ── procedural art factories (GLTF swap seam) ─────────────────────────────
 
 function makeRoadTexture(): THREE.CanvasTexture {
@@ -1104,16 +1161,23 @@ function makePine(i: number): THREE.Object3D {
   const w = 6 + (i % 3) * 3;
   const h = 8 + ((i * 7) % 14);
   const trunkH = h * 0.3;
+  // baked vertical gradients (dark base, lit tip) fake the ambient occlusion
+  // under a conifer's skirt — it is what stops the cone reading as a flat
+  // cut-out. Neither mesh is rotated, so geometry-space up IS up.
+  const trunkGeo = new THREE.CylinderGeometry(w * 0.05, w * 0.08, trunkH, 6);
+  bakeVerticalGradient(trunkGeo, 0.55, 1);
   const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(w * 0.05, w * 0.08, trunkH, 6),
-    new THREE.MeshLambertMaterial({ color: 0x4a3a28 }),
+    trunkGeo,
+    new THREE.MeshLambertMaterial({ color: 0x4a3a28, vertexColors: true }),
   );
   trunk.position.y = trunkH / 2;
   group.add(trunk);
   const canopyH = h * 0.85;
+  const canopyGeo = new THREE.ConeGeometry(w * 0.42, canopyH, 7);
+  bakeVerticalGradient(canopyGeo, 0.48, 1.06);
   const canopy = new THREE.Mesh(
-    new THREE.ConeGeometry(w * 0.42, canopyH, 7),
-    new THREE.MeshLambertMaterial({ color: 0x1f3d2b }),
+    canopyGeo,
+    new THREE.MeshLambertMaterial({ color: 0x1f3d2b, vertexColors: true }),
   );
   canopy.position.y = trunkH + canopyH / 2 - trunkH * 0.3;
   group.add(canopy);
