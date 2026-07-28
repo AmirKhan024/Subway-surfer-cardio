@@ -46,9 +46,30 @@ function fmtTimer(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/**
+ * The one chip surface — brass on teak, not a black rectangle.
+ *
+ * Every chip in the cluster shares this so they read as ONE crafted set: a
+ * fixed height (the old py-1 / py-0.5 mix made the wrap look accidental), a
+ * hairline brass border, and a bevel made of two inset shadows — a brass
+ * top-highlight and a black bottom shade. Composed as an arbitrary shadow
+ * rather than a new Tailwind token so the config stays untouched; the outer
+ * drop is the old `glass-sm` value, kept.
+ */
+const CHIP_SHELL =
+  'inline-flex items-center justify-center rounded-[10px] border border-brass/40 ' +
+  'bg-gradient-to-b from-teak-light/75 to-teak-deep/85 backdrop-blur-md ' +
+  'shadow-[inset_0_1px_0_rgba(242,223,166,0.20),inset_0_-1px_0_rgba(0,0,0,0.35),0_4px_16px_0_rgba(15,23,42,0.25)]';
+
+/** the one chip height. Kept OUT of CHIP_SHELL so a consumer can override it
+ *  without two competing h-* utilities landing in the same class string. */
+const CHIP_H = 'h-6 sm:h-7';
+
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-brass/30 bg-teak-deep/75 px-2 py-1 text-xs font-semibold text-brass-pale backdrop-blur-md shadow-glass-sm sm:px-3 sm:py-1.5 sm:text-sm">
+    <div
+      className={`${CHIP_SHELL} ${CHIP_H} px-2 text-xs font-semibold text-brass-pale sm:px-3 sm:text-sm`}
+    >
       {children}
     </div>
   );
@@ -93,9 +114,12 @@ function PrayerFlagBar({ progress }: { progress: number }) {
 /** Distance as a roadside kilometre stone — same value, hand-painted. */
 function MilestoneStone({ metres }: { metres: number }) {
   return (
-    <div className="overflow-hidden rounded-md border border-black/50 shadow-glass-sm">
-      <div className="h-1.5 bg-brass" />
-      <div className="bg-[#E8E4DA] px-2 py-0.5 text-center">
+    // deliberately NOT a chip — it is a painted roadside stone, and the one
+    // light-on-dark element in the cluster. Only its HEIGHT joins the system,
+    // so the two columns line up however the cluster wraps.
+    <div className="flex h-6 flex-col overflow-hidden rounded-md border border-black/50 shadow-glass-sm sm:h-7">
+      <div className="h-1.5 shrink-0 bg-gradient-to-b from-brass-light to-brass" />
+      <div className="flex flex-1 items-center justify-center bg-gradient-to-b from-[#F0EDE4] to-[#DCD7CB] px-2 text-center">
         <span className="font-heading text-xs font-black tabular-nums text-teak sm:text-sm">
           {metres}
         </span>
@@ -124,6 +148,38 @@ function StumbleIcon() {
       />
       <path d="M10 9.6c1.6.3 2.8.9 3.6 1.9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
       <circle cx="10.6" cy="3.4" r="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+/**
+ * Cleared tally — a torana, the timber trail gateway.
+ *
+ * A gate is literally what the count measures: every hurdle and beam is a
+ * gate you pass through. Deliberately NOT a milepost (the milestone stone two
+ * chips to its left already IS one) and NOT cairn notches (the cairn is the
+ * Walong memorial — it must never read as a score). Same 16×14 box, same
+ * brass line-weight and the same finial-dot idiom as StumbleIcon, so the two
+ * glyphs are visibly siblings.
+ */
+function ClearedIcon() {
+  return (
+    <svg viewBox="0 0 16 14" aria-hidden className="h-3.5 w-4">
+      {/* lintel */}
+      <path d="M1.6 4.4h12.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      {/* uprights */}
+      <path d="M3.7 13V4.4M12.3 13V4.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      {/* the opening you pass under */}
+      <path
+        d="M5.5 13V9.2a2.5 2.5 0 0 1 5 0V13"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        fill="none"
+      />
+      {/* finial */}
+      <path d="M8 4.4V2.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+      <circle cx="8" cy="1.8" r="1.2" fill="currentColor" />
     </svg>
   );
 }
@@ -288,8 +344,8 @@ function ActChip({ act }: { act: ActId }) {
   const m = actMeta(act);
   return (
     <div
-      className="rounded-lg border border-brass/25 bg-teak-deep/70 px-1.5 py-0.5 text-center
-                 text-[9px] font-bold uppercase tracking-[0.16em] backdrop-blur-md"
+      // a sub-line under the stone, so it is the one chip that runs shorter
+      className={`${CHIP_SHELL} h-[18px] px-1.5 text-center text-[9px] font-bold uppercase tracking-[0.16em]`}
       style={{ color: m.accent }}
       title={m.beat}
     >
@@ -376,12 +432,12 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
       {/* top-left chips — wrap into a narrow stack on phones so they never
           collide with the centered timer or the pause chip */}
       <div
-        className="absolute left-3 flex max-w-[38vw] flex-wrap gap-1.5 sm:max-w-none sm:gap-2"
+        className="absolute left-3 flex max-w-[38vw] flex-wrap items-start gap-1 sm:max-w-none sm:gap-1.5"
         style={{ top: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
       >
         {/* the milestone stone and the place you are passing through, as a
             column — so naming the act costs no extra width in the cluster */}
-        <div className="flex flex-col items-stretch gap-1">
+        <div className="flex flex-col items-stretch gap-[3px]">
           <MilestoneStone metres={Math.floor(hud.distance)} />
           {act !== null && <ActChip act={act} />}
         </div>
@@ -394,11 +450,18 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
             {hud.stumbles}
           </span>
         </Chip>
-        <Chip>✓ {hud.cleared}</Chip>
+        {/* full-strength brass: cleared is the positive tally, stumbles above
+            stay muted on purpose */}
+        <Chip>
+          <span className="flex items-center gap-1 text-brass-pale" title="Gates cleared">
+            <ClearedIcon />
+            {hud.cleared}
+          </span>
+        </Chip>
         {/* the Kosha chip and its streak pips travel together: a column, so
             the pips always sit directly UNDER the reward they feed, however
             the cluster wraps on a narrow phone */}
-        <div className="flex flex-col items-stretch gap-1">
+        <div className="flex flex-col items-stretch gap-[3px]">
           <Chip>
             <span className="flex items-center gap-1 text-brass-light">
               <KoshaIcon />
