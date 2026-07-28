@@ -13,7 +13,7 @@
  * WHAT IT DOES NOT PROVE: detection, calibration or feel — keyboard mode has
  * no key listener, so the runner never acts. Real play needs a webcam.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -73,7 +73,11 @@ async function main() {
     });
 
     const frameStats = [];
+    // a scene throw shows up as "canvas never appeared" three steps later —
+    // surface it where it happens
+    page.on('pageerror', (e) => process.stdout.write(`  PAGE ERROR: ${e.message}\n`));
     page.on('console', (msg) => {
+      if (msg.type() === 'error') process.stdout.write(`  console.error: ${msg.text()}\n`);
       const t = msg.text();
       if (!t.includes('FRAME_STATS')) return;
       const m = t.match(/\{.*\}/s);
@@ -93,7 +97,15 @@ async function main() {
       await page.goto(`${ORIGIN}/?debug=1&kbd=1&sec=${SESSION_SEC}`, {
         waitUntil: 'domcontentloaded',
       });
-      await page.waitForSelector('canvas', { timeout: 60_000 });
+      // `next dev` compiles lazily, and the first hit can land mid-build and
+      // 404 its own chunks — one reload after the compile settles fixes it
+      try {
+        await page.waitForSelector('canvas', { timeout: 45_000 });
+      } catch {
+        process.stdout.write('  first load raced the dev compile — reloading\n');
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('canvas', { timeout: 60_000 });
+      }
 
       const t0 = Date.now();
       for (const shot of SHOTS) {
@@ -134,12 +146,12 @@ async function main() {
     process.stdout.write(`artifacts → ${OUT}\n`);
   } finally {
     await browser.close();
-    dev.kill();
-    if (process.platform === 'win32') {
-      spawn('cmd', ['/c', `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${PORT}') do taskkill /F /PID %a`], {
-        stdio: 'ignore',
-        shell: true,
-      });
+    // `next dev` spawns a child that actually holds the port, so killing the
+    // wrapper leaves it listening and the NEXT run can't bind. Kill the tree.
+    if (process.platform === 'win32' && dev.pid) {
+      spawnSync('taskkill', ['/PID', String(dev.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      dev.kill();
     }
   }
 }

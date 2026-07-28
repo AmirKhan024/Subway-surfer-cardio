@@ -43,6 +43,18 @@ const FOG_FAR = 95;
 const LOOP_LEN = 200; // prop recycling loop, meters
 const ROAD_W = 8;
 
+// ── the Act-2 footbridge railing (see buildRailing) ──────────────────────
+/** a little longer than the prop loop, so the scroll slide can never open a
+ *  gap at either end of the run of posts */
+const RAIL_SPAN = 208;
+/** metres between posts. The per-frame scroll is `d % RAIL_POST_SPACING`, so
+ *  this constant MUST be the one used to place them — see update(). */
+const RAIL_POST_SPACING = 4;
+const RAIL_POSTS_PER_SIDE = 52; // 52 * 4 = RAIL_SPAN
+/** the exact x the old painted rail planes stood at. Outboard of the trail;
+ *  ROAD_W and every clearance are untouched. */
+const RAIL_X = ROAD_W / 2 + 0.9;
+
 // The dawn ramp (DAWN / DawnStop) and LOHIT_GREEN now live in runner-acts.ts
 // alongside the act bounds. They are pure data, and keeping them in a
 // DOM-free module is what lets the tests assert that the ramp lines up with
@@ -104,9 +116,10 @@ export class RunnerScene {
   private roadMat!: THREE.MeshLambertMaterial;
   private lohitMat!: THREE.MeshLambertMaterial;
   private barMat!: THREE.MeshLambertMaterial;
-  private railMat!: THREE.MeshBasicMaterial;
-  private railTex!: THREE.CanvasTexture;
-  private rails: THREE.Mesh[] = [];
+  /** the Act-2 footbridge railing — ONE group, two InstancedMeshes inside */
+  private railGroup!: THREE.Group;
+  private railMat!: THREE.MeshLambertMaterial;
+  private railsOn = false;
   private ridgePeaks: THREE.Mesh[] = [];
   /** preallocated act blend weights — actWeights() writes into this */
   private actW: ActWeights = { w1: 1, w2: 0, w3: 0 };
@@ -236,24 +249,7 @@ export class RunnerScene {
     // rails sit just outboard of the trail and inboard of the sandbars, so
     // with the Act-2 water treatment the trail READS as a narrow deck over
     // the river without a single measurement changing.
-    this.railTex = makeRailTexture();
-    this.railTex.wrapS = THREE.RepeatWrapping;
-    this.railTex.repeat.set(40, 1);
-    this.railMat = new THREE.MeshBasicMaterial({
-      map: this.railTex,
-      transparent: true,
-      alphaTest: 0.4,
-      side: THREE.DoubleSide,
-      opacity: 0,
-    });
-    for (const side of [-1, 1]) {
-      const rail = new THREE.Mesh(new THREE.PlaneGeometry(LOOP_LEN, 0.55), this.railMat);
-      rail.rotation.y = Math.PI / 2;
-      rail.position.set(side * (ROAD_W / 2 + 0.9), 0.42, -LOOP_LEN / 2 + 10);
-      rail.visible = false; // hidden outside the Crossing — 0 extra draw calls
-      this.scene.add(rail);
-      this.rails.push(rail);
-    }
+    this.buildRailing();
 
     // recycled trailside props. Counts and x/z placement are kept from the
     // city build so the draw count does not grow — only the art changed.
@@ -313,6 +309,106 @@ export class RunnerScene {
     // edge-flash in the React overlay, driven off the OBSTACLE(cleared:false)
     // event — see runner-layer.tsx (fxHit).
     this.scene.add(this.camera);
+  }
+
+  /**
+   * The Crossing's railing — a wire-rope-and-timber footbridge, built once.
+   *
+   * The old rails were two PlaneGeometry strips with a painted texture: flat,
+   * static, and they read as steel bars floating beside the trail. This is real
+   * (thin box) geometry — posts, a top beam, two rope lines and a deck kerb the
+   * posts visibly stand on — so the crossing has depth from any angle.
+   *
+   * COST: two InstancedMeshes, so it is still exactly 2 draw calls, the same as
+   * the two planes it replaces. ~1.3k triangles, all of it hidden behind
+   * railGroup.visible = false outside Act 2, which culls the subtree before the
+   * render list is built — 0 draw calls elsewhere, exactly as before.
+   *
+   * PAINT ONLY: ROAD_W, obstacle footprints, clearances and lane logic are
+   * untouched. RAIL_X is the exact x the planes used.
+   */
+  private buildRailing(): void {
+    // Lambert, not Basic: the railing is the only Act-2 element close to the
+    // camera, and letting the dawn key light shade the post faces is what sells
+    // real timber over a painted decal. ONE shared material — the act fade is a
+    // single opacity write for every instance — and per-part tint rides on the
+    // instanceColor attribute, so timber and wire rope cost no extra draw call.
+    // Instance field, not a module singleton: same dispose()/StrictMode reason
+    // as the other shared materials above.
+    this.railMat = new THREE.MeshLambertMaterial({
+      color: 0xffffff, // white base — instanceColor multiplies into it
+      transparent: true,
+      opacity: 0,
+    });
+    this.railGroup = new THREE.Group();
+    this.railGroup.visible = false;
+
+    const dummy = new THREE.Object3D();
+    const timber = new THREE.Color(0x6f5a3e);
+    const timberDark = new THREE.Color(0x574530);
+    const rope = new THREE.Color(0x9aa3a8);
+
+    // ── posts, both sides in one instanced mesh ──────────────────────────
+    const posts = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.09, 0.95, 0.12),
+      this.railMat,
+      RAIL_POSTS_PER_SIDE * 2,
+    );
+    let n = 0;
+    for (const side of [-1, 1]) {
+      for (let k = 0; k < RAIL_POSTS_PER_SIDE; k++) {
+        // deterministic sub-degree yaw and a little height variance, so the
+        // run of posts reads hand-driven rather than extruded
+        const sy = 1 + ((k * 13) % 5) * 0.03;
+        dummy.position.set(side * RAIL_X, 0.475 * sy, 10 - k * RAIL_POST_SPACING);
+        dummy.rotation.set(0, (((k * 37) % 7) - 3) * 0.012, 0);
+        dummy.scale.set(1, sy, 1);
+        dummy.updateMatrix();
+        posts.setMatrixAt(n, dummy.matrix);
+        posts.setColorAt(n, k % 3 === 0 ? timberDark : timber);
+        n += 1;
+      }
+    }
+
+    // ── the long members: top beam, two rope lines, deck kerb ────────────
+    // one unit box scaled per instance, so all eight share a single call.
+    // The kerb is what stops the deck floating: a timber stringer flush on the
+    // road plane, inboard of the posts, that the posts visibly stand on.
+    const members = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.1, 0.1, RAIL_SPAN),
+      this.railMat,
+      8,
+    );
+    const KERB_X = ROAD_W / 2 + 0.45;
+    const LINES: { x: number; y: number; sx: number; sy: number; c: THREE.Color }[] = [];
+    for (const side of [-1, 1]) {
+      LINES.push({ x: side * RAIL_X, y: 0.96, sx: 1.5, sy: 0.9, c: timber }); // top beam
+      LINES.push({ x: side * RAIL_X, y: 0.64, sx: 0.42, sy: 0.42, c: rope }); // upper rope
+      LINES.push({ x: side * RAIL_X, y: 0.36, sx: 0.42, sy: 0.42, c: rope }); // lower rope
+      LINES.push({ x: side * KERB_X, y: 0.065, sx: 3, sy: 1.3, c: timberDark }); // kerb
+    }
+    LINES.forEach((l, i) => {
+      dummy.position.set(l.x, l.y, 10 - RAIL_SPAN / 2);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(l.sx, l.sy, 1);
+      dummy.updateMatrix();
+      members.setMatrixAt(i, dummy.matrix);
+      members.setColorAt(i, l.c);
+    });
+
+    for (const im of [posts, members]) {
+      im.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+      im.instanceMatrix.needsUpdate = true;
+      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      im.updateMatrix();
+      im.matrixAutoUpdate = false;
+      // the railing spans the whole loop and is only ever visible when it is
+      // right beside the camera; culling it per-frame would cost more than it
+      // saves, and railGroup.visible already does the real culling
+      im.frustumCulled = false;
+      this.railGroup.add(im);
+    }
+    this.scene.add(this.railGroup);
   }
 
   /** the art for one prop kind. Kept as a single dispatcher so the act plan
@@ -431,6 +527,14 @@ export class RunnerScene {
 
     // road scroll
     this.roadTex.offset.y = (d / LOOP_LEN) * 24;
+
+    // railing scroll. The posts are evenly spaced, so sliding the whole group
+    // by one spacing is a perfect period — the run of posts is indistinguishable
+    // from an infinite one for one float write and no recycling bookkeeping.
+    // The modulo is taken against the SAME constant that placed them; d is a
+    // distance and never negative, so no sign guard is needed. Gated on railsOn
+    // so we do not dirty a matrix for the two thirds of the run it is hidden.
+    if (this.railsOn) this.railGroup.position.z = d % RAIL_POST_SPACING;
 
     // recycle props along the loop.
     //
@@ -615,10 +719,14 @@ export class RunnerScene {
 
     // guard-rails belong to the bridge and nowhere else. Hidden below a
     // whisker of opacity so they cost ZERO draw calls in Kaho and Dong.
-    const railOpacity = w2;
-    this.railMat.opacity = railOpacity;
-    const railsOn = railOpacity > 0.01;
-    for (const rail of this.rails) rail.visible = railsOn;
+    // One write on the shared material fades every post, beam, rope and kerb.
+    // `transparent` stays true permanently rather than being toggled at the
+    // boundary: flipping it moves the meshes between three's opaque and
+    // transparent render lists every frame there, and the list churn costs more
+    // than the sorting purity is worth. At w2 ~ 1 it is effectively opaque.
+    this.railMat.opacity = w2;
+    this.railsOn = w2 > 0.01;
+    this.railGroup.visible = this.railsOn;
 
     // stash for applyFinale, which pushes on top of the act look
     this.actMistOpacity = this.mistMat.opacity;
@@ -714,7 +822,9 @@ export class RunnerScene {
           mesh.scale.set(s, s, s);
           mesh.position.y += t * (coin.kosha ? 1.1 : 0.5);
           mesh.traverse((o) => {
-            const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+            // widened from MeshBasicMaterial: the mohur's rim is Lambert now.
+            // Structural cast either way — the 'opacity' guard is the real test.
+            const m = (o as THREE.Mesh).material as THREE.Material | undefined;
             if (m && 'opacity' in m) {
               m.transparent = true;
               m.opacity = 1 - t;
@@ -932,13 +1042,20 @@ export function makeBeam(): THREE.Object3D {
  */
 export function makeCoin(): THREE.Object3D {
   const group = new THREE.Group();
+  // 4 radial segments = a SQUARE-section rim. The four flats catch the key
+  // light at different angles as the coin spins, which is what reads as a
+  // milled edge — Lambert here (Basic everywhere else) so the dawn does that
+  // shading for free. That contrast against the flat face IS the emboss; it
+  // costs no extra mesh and no extra draw call.
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(0.19, 0.05, 8, 20),
-    new THREE.MeshBasicMaterial({ color: 0xd9a441 }),
+    new THREE.TorusGeometry(0.105, 0.026, 4, 16),
+    new THREE.MeshLambertMaterial({ color: 0xd9a441, emissive: 0x3a2b0d }),
   );
+  ring.rotation.z = Math.PI / 4; // flats front/back, not corner-on
   group.add(ring);
+  // the face stays unlit and bright so a mohur is still findable in Kaho's dark
   const disc = new THREE.Mesh(
-    new THREE.CircleGeometry(0.135, 16),
+    new THREE.CircleGeometry(0.094, 14),
     new THREE.MeshBasicMaterial({ color: 0xf7d872, side: THREE.DoubleSide }),
   );
   group.add(disc);
@@ -1086,37 +1203,6 @@ function makeCairn(): THREE.Object3D {
 }
 
 /**
- * Guard-rail texture for the Crossing — posts and two wire-rope lines on a
- * transparent ground, tiled along the deck and UV-scrolled with the road.
- *
- * A texture rather than geometry on purpose: two planes wearing this cost 2
- * draw calls instead of ~80 posts, and they scroll for free off the same
- * expression the trail already uses.
- */
-function makeRailTexture(): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = 64;
-  c.height = 32;
-  const g = c.getContext('2d')!;
-  g.clearRect(0, 0, 64, 32);
-  // two wire ropes
-  g.strokeStyle = '#9aa3a8';
-  g.lineWidth = 2;
-  g.beginPath();
-  g.moveTo(0, 7);
-  g.lineTo(64, 7);
-  g.moveTo(0, 18);
-  g.lineTo(64, 18);
-  g.stroke();
-  // a weathered timber post
-  g.fillStyle = '#5a4a35';
-  g.fillRect(6, 0, 7, 32);
-  g.fillStyle = '#6d5a41';
-  g.fillRect(6, 0, 3, 32);
-  return new THREE.CanvasTexture(c);
-}
-
-/**
  * Gonpa (monastery) — a LANDMARK, one per recycling loop, not a skyline.
  *
  * The previous version of this was a box wearing a tiled lit-window texture
@@ -1243,17 +1329,27 @@ function makeTrailMarker(i: number): THREE.Object3D {
     }
     return group;
   }
+  // the kilometre stone. It used to be a fresh-cream box sitting straight on
+  // the ground plane, which read as a floating white slab — worst beside the
+  // Act-2 bridge, and blown out against the Act-3 gold sky. Weathered down and
+  // set on a rough plinth so it is PLANTED in the verge.
+  const plinth = new THREE.Mesh(
+    new THREE.BoxGeometry(0.46, 0.1, 0.28),
+    new THREE.MeshLambertMaterial({ color: 0x6b6459 }), // the makeScree rock tone
+  );
+  plinth.position.y = 0.05;
+  group.add(plinth);
   const stone = new THREE.Mesh(
     new THREE.BoxGeometry(0.34, 0.62, 0.18),
-    new THREE.MeshLambertMaterial({ color: 0xe8e4da }),
+    new THREE.MeshLambertMaterial({ color: 0xbfb6a4 }),
   );
-  stone.position.y = 0.31;
+  stone.position.y = 0.36;
   group.add(stone);
   const cap = new THREE.Mesh(
     new THREE.BoxGeometry(0.36, 0.16, 0.2),
     new THREE.MeshLambertMaterial({ color: 0xd9a441 }),
   );
-  cap.position.y = 0.66;
+  cap.position.y = 0.71;
   group.add(cap);
   return group;
 }
