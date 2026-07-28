@@ -16,6 +16,7 @@
 
 export type SfxName =
   | 'coin'
+  | 'kosha'
   | 'jump'
   | 'squat'
   | 'stumble'
@@ -234,6 +235,21 @@ class AudioManager {
           // the old bright rising ping dominated a level built on restraint.
           this.blip(2093, 0.028, 'square', 0.05);
           this.blip(1244.51, 0.07, 'triangle', 0.09, 0.012);
+          break;
+        case 'kosha':
+          // sealing the pay-casket: the lid swings over on a brass hinge, the
+          // latch drops, the box takes the weight, and the metal rings off.
+          // Deliberately warmer and LONGER than 'coin' (a 28ms tick) — a mohur
+          // is a tick, a Kosha is an event. It earns the length by being rare:
+          // five clean actions, so at most a handful in a whole run.
+          // NOTE: sweep() always starts at ctx.currentTime (no delay param),
+          // so only the hinge sweeps; every later layer is a delayed blip.
+          this.sweep(1480, 560, 0.11, 'triangle', 0.11); // hinge, lid coming over
+          this.blip(880.0, 0.045, 'square', 0.075, 0.085); // latch, A5
+          this.blip(1174.66, 0.05, 'square', 0.065, 0.105); // latch, D6
+          this.blip(196.0, 0.17, 'triangle', 0.15, 0.115); // the casket's weight
+          this.blip(130.81, 0.24, 'sine', 0.11, 0.135); // body, sub layer
+          this.blip(1567.98, 0.34, 'sine', 0.055, 0.15); // brass ring-off
           break;
         case 'jump':
           this.sweep(300, 700, 0.18, 'sine', 0.2);

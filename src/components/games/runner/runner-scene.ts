@@ -23,7 +23,7 @@ import type {
   SceneObstacle,
   SceneCoin,
 } from '@/modules/game/engines/runner-engine';
-import { COIN } from './runner-constants';
+import { COIN, KOSHA } from './runner-constants';
 
 const FOG_NEAR = 30;
 const FOG_FAR = 95;
@@ -406,7 +406,7 @@ export class RunnerScene {
       const wanted = inView && (!coin.collected || this.coinPops.has(coin.id));
       if (wanted && !mesh) {
         if (coin.collected) continue; // collected before ever visible
-        mesh = makeCoin();
+        mesh = coin.kosha ? makeKosha() : makeCoin();
         this.coinMeshes.set(coin.id, mesh);
         this.scene.add(mesh);
       }
@@ -421,22 +421,29 @@ export class RunnerScene {
       }
 
       mesh.position.z = -(coin.zAhead + lagOffset);
-      mesh.position.y = coin.aerial ? 1.7 : 0.8;
-      mesh.rotation.y = (nowMs / 1000) * COIN.SPIN_RAD_S;
+      // a Kosha turns slower and bobs gently — it has weight, and it reads as
+      // waiting for you rather than scattered on the trail like a mohur
+      mesh.position.y = coin.kosha
+        ? KOSHA.Y + Math.sin(nowMs / 400) * 0.04
+        : coin.aerial
+          ? 1.7
+          : 0.8;
+      mesh.rotation.y = (nowMs / 1000) * (coin.kosha ? KOSHA.SPIN_RAD_S : COIN.SPIN_RAD_S);
 
-      // collect pop: quick scale-out then remove
+      // collect pop: quick scale-out then remove (the Kosha's is bigger and
+      // slower — the payoff for five clean actions should be dwelt on)
       const popStart = this.coinPops.get(coin.id);
       if (popStart !== undefined) {
-        const t = (nowMs - popStart) / 200;
+        const t = (nowMs - popStart) / (coin.kosha ? KOSHA.POP_MS : 200);
         if (t >= 1) {
           this.scene.remove(mesh);
           this.coinMeshes.delete(coin.id);
           this.coinPops.delete(coin.id);
           disposeObject(mesh);
         } else {
-          const s = 1 + t * 0.8;
+          const s = 1 + t * (coin.kosha ? 1.6 : 0.8);
           mesh.scale.set(s, s, s);
-          mesh.position.y += t * 0.5;
+          mesh.position.y += t * (coin.kosha ? 1.1 : 0.5);
           mesh.traverse((o) => {
             const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
             if (m && 'opacity' in m) {
@@ -666,6 +673,42 @@ export function makeCoin(): THREE.Object3D {
     new THREE.MeshBasicMaterial({ color: 0xf7d872, side: THREE.DoubleSide }),
   );
   group.add(disc);
+  return group;
+}
+
+/**
+ * The Sealed Kosha — the brass-bound pay-casket itself, not a bigger mohur.
+ * Earned by five clean actions in a row, so it should read as a different
+ * CLASS of object the moment it comes over the rise, not as a fat coin.
+ *
+ * Mesh size is purely visual, same contract as makeCoin: the pickup is decided
+ * engine-side from atDistance, never from this geometry.
+ */
+export function makeKosha(): THREE.Object3D {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.34, 0.22, 0.24),
+    new THREE.MeshBasicMaterial({ color: 0x7a5c2e }),
+  );
+  group.add(body);
+  const lid = new THREE.Mesh(
+    new THREE.BoxGeometry(0.36, 0.07, 0.26),
+    new THREE.MeshBasicMaterial({ color: 0xe8c46a }),
+  );
+  lid.position.y = 0.14;
+  group.add(lid);
+  const band = new THREE.Mesh(
+    new THREE.BoxGeometry(0.37, 0.04, 0.25),
+    new THREE.MeshBasicMaterial({ color: 0xc9a227 }),
+  );
+  band.position.y = -0.02;
+  group.add(band);
+  const latch = new THREE.Mesh(
+    new THREE.BoxGeometry(0.07, 0.09, 0.02),
+    new THREE.MeshBasicMaterial({ color: 0xf2dfa6 }),
+  );
+  latch.position.set(0, 0.03, 0.13);
+  group.add(latch);
   return group;
 }
 

@@ -233,7 +233,15 @@ export default function ReportScreen({
             sub="How fast you moved after the cue."
           />
           <Stat label="Time" value={`${(raw.elapsed / 1000).toFixed(0)}s`} />
+          {/* engagement tally, deliberately away from the musculage figure:
+              the Mohurs total INCLUDES Kosha bonuses, and neither number can
+              move the muscle age by a single year */}
           <Stat label="Mohurs" value={`${raw.coinsCollected}`} />
+          <Stat
+            label="Koshas"
+            value={`${raw.sealedKoshas ?? 0}`}
+            sub="Sealed by 5 clean actions in a row."
+          />
         </div>
 
         {raw.assessmentValid === 0 && !score.incomplete && (

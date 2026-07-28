@@ -25,6 +25,10 @@ export interface Coin {
   atDistance: number;
   /** aerial coins sit above a hurdle and need jumpY >= COIN.AERIAL_JUMPY */
   aerial: boolean;
+  /** sealed Kosha — the clean-streak reward. Never chunk-generated: the engine
+   *  injects one when the streak lands. Worth KOSHA.BONUS_MOHURS and exempt
+   *  from the stumble collect-lockout, so a streak never loses its own prize. */
+  kosha?: boolean;
 }
 
 /** Deterministic 32-bit PRNG (mulberry32). */

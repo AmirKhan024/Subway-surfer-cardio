@@ -129,6 +129,14 @@ const config: Config = {
           '25%': { opacity: '1' },
           '100%': { opacity: '0' },
         },
+        // sealed-Kosha gold wash: same opacity-only shape as fxPulse, but it
+        // holds before it goes — a reward should linger where a stumble stings
+        fxGold: {
+          '0%': { opacity: '0' },
+          '20%': { opacity: '1' },
+          '55%': { opacity: '0.85' },
+          '100%': { opacity: '0' },
+        },
         cuePop: {
           '0%': { transform: 'scale(1.18)' },
           '100%': { transform: 'scale(1)' },
@@ -143,6 +151,7 @@ const config: Config = {
         'fx-streak': 'fxStreak 0.24s ease-in forwards',
         'fx-edge': 'fxEdge 0.35s ease-out forwards',
         'fx-pulse': 'fxPulse 0.4s ease-out forwards',
+        'fx-gold': 'fxGold 0.55s ease-out forwards',
         'cue-pop': 'cuePop 0.2s ease-out',
       },
     },

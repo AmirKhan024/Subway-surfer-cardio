@@ -52,6 +52,13 @@ export interface RunnerRawData {
   /** ENGAGEMENT ONLY — coins never enter the KR1/KR1N scoring bands or
    *  musculage (kr1-local.ts must never reference this). */
   coinsCollected: number;
+  /** ENGAGEMENT ONLY — sealed Koshas (the 5-clean-clear streak reward). Like
+   *  coinsCollected this never enters the KR1/KR1N scoring bands or musculage
+   *  (kr1-local.ts must never reference this).
+   *  OPTIONAL deliberately: kr1-local.test.ts builds a full RunnerRawData
+   *  literal and that file is frozen, so a required field would break its
+   *  typecheck. The engine always emits it. */
+  sealedKoshas?: number;
   /** Course seed used for this run (comparability audit trail). */
   seed: number;
   /** ms */

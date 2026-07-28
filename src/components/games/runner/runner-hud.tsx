@@ -27,6 +27,13 @@ export interface HudState {
   headMode?: boolean;
   /** engagement only — never scored */
   coins: number;
+  /** consecutive clean clears, 0..streakTarget-1 — the pip row. Engagement
+   *  only: this is a reason to keep clearing cleanly, not a measurement. */
+  cleanStreak: number;
+  /** clean clears that seal a Kosha (KOSHA.STREAK_TARGET) — the pip count */
+  streakTarget: number;
+  /** Koshas sealed this run — the pip row pops when this increments */
+  sealedKoshas: number;
   /** session time remaining in ms (game-clock time), null = no timer */
   timerMs: number | null;
   /** chosen session length in ms — drives the top progress bar */
@@ -132,6 +139,52 @@ function KoshaIcon() {
   );
 }
 
+/**
+ * Clean-streak pips — the studs on the Kosha's lid band. They fill as the
+ * streak builds, empty the instant a stumble takes it, and the whole row pops
+ * when the fifth seals a Kosha. This visible goal IS the retention loop: the
+ * player should always be able to see how close the next chest is.
+ *
+ * The pop is a remount keyed on `sealed` (the same trick the action cue uses
+ * below), so it costs one keyed element and no animation clock — and it is
+ * `motion-safe:` gated, so reduced-motion users still get the fill/empty
+ * state change with no movement at all.
+ */
+function StreakPips({
+  streak,
+  target,
+  sealed,
+}: {
+  streak: number;
+  target: number;
+  sealed: number;
+}) {
+  return (
+    <div
+      key={sealed}
+      className="flex items-center gap-[3px] rounded-lg border border-brass/25 bg-teak-deep/70 px-1.5 py-1 backdrop-blur-md motion-safe:animate-cue-pop"
+      title={`Clean streak — ${target} in a row seals a Kosha`}
+      aria-label={`Clean streak ${streak} of ${target}`}
+    >
+      {Array.from({ length: target }, (_, i) => {
+        const lit = i < streak;
+        return (
+          <span
+            key={i}
+            className="h-1.5 w-1.5 rounded-full transition-[background-color,box-shadow] duration-200"
+            style={{
+              // brass tokens as literals: Tailwind can't compose a
+              // runtime-conditional arbitrary box-shadow
+              background: lit ? '#E8C46A' : 'rgba(201, 162, 39, 0.22)',
+              boxShadow: lit ? '0 0 5px rgba(232,196,106,0.75)' : 'none',
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 export function ActionCue({
   cue,
   lowImpact,
@@ -220,12 +273,25 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
           </span>
         </Chip>
         <Chip>✓ {hud.cleared}</Chip>
-        <Chip>
-          <span className="flex items-center gap-1 text-brass-light">
-            <KoshaIcon />
-            {hud.coins}
-          </span>
-        </Chip>
+        {/* the Kosha chip and its streak pips travel together: a column, so
+            the pips always sit directly UNDER the reward they feed, however
+            the cluster wraps on a narrow phone */}
+        <div className="flex flex-col items-stretch gap-1">
+          <Chip>
+            <span className="flex items-center gap-1 text-brass-light">
+              <KoshaIcon />
+              {hud.coins}
+              {hud.sealedKoshas > 0 && (
+                <span className="text-brass-pale/70">·{hud.sealedKoshas}</span>
+              )}
+            </span>
+          </Chip>
+          <StreakPips
+            streak={hud.cleanStreak}
+            target={hud.streakTarget}
+            sealed={hud.sealedKoshas}
+          />
+        </div>
       </div>
 
       {/* center-top action cue — keyed per obstacle so every NEW cue pops

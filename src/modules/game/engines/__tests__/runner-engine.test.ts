@@ -24,7 +24,11 @@ import {
   JUICE,
   CAMERA,
   STUMBLE,
+  KOSHA,
 } from '@/components/games/runner/runner-constants';
+// read-only import: src/lib/scoring stays byte-identical, but the engagement
+// side must be able to PROVE the score cannot see a Kosha.
+import { computeKR1Score } from '@/lib/scoring/kr1-local';
 import type { NormalizedLandmark } from '../types';
 import { LM } from '../types';
 
@@ -231,6 +235,227 @@ describe('RunnerEngine — coin collection', () => {
     );
     expect(squatStart).toBeGreaterThanOrEqual(0);
     expect(firstSquatRep).toBeGreaterThan(squatStart);
+  });
+});
+
+// ── sealed Kosha: the clean-streak reward (ENGAGEMENT ONLY) ────────────────
+
+/** Drive a head bot the way the parity test does, so neck/body award parity
+ *  is proven against the same script that already clears the course. */
+function runHeadBot(engine: RunnerEngine): void {
+  let t = calibrateHead(engine);
+  engine.setSessionMs(60_000);
+  engine.startPlaying();
+  let pitchK = 0.5;
+  let lookUpScript: number[] = [];
+  let jumpedFor = -1;
+  let frames = 0;
+  while (!engine.isComplete() && frames < 12000) {
+    frames++;
+    t += FRAME_MS;
+    const cue = engine.getSceneState().cue;
+    if (lookUpScript.length > 0) {
+      pitchK = lookUpScript.shift()!;
+    } else if (cue?.type === 'beam') {
+      pitchK = Math.max(0.3, pitchK - 0.02);
+    } else if (cue?.type === 'hurdle' && cue.progress >= 0.7 && jumpedFor !== cue.obstacleId) {
+      jumpedFor = cue.obstacleId;
+      lookUpScript = [...ramp(pitchK, 0.68, 5), ...Array(14).fill(0.68), ...ramp(0.68, 0.5, 6)];
+      pitchK = lookUpScript.shift()!;
+    } else {
+      pitchK = Math.min(0.5, pitchK + 0.02);
+    }
+    engine.processFrame(makeHeadFrame({ pitchK }), t);
+  }
+}
+
+describe('RunnerEngine — sealed Kosha (clean-streak reward)', () => {
+  it('the chest always lands inside the gap that follows — never past the next plane', () => {
+    // If SPAWN_AHEAD_M ever exceeded the tightest possible obstacle gap, the
+    // Kosha would drop BEYOND the next action plane, where the locomotion /
+    // resume-grace clamp can hold the world short of it and strand the award.
+    expect(KOSHA.SPAWN_AHEAD_M).toBeLessThan(COURSE.MIN_GAP_S * COURSE.SPEED_START);
+  });
+
+  it('every STREAK_TARGET-th clean clear seals exactly one Kosha', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    const events = engine.drainEvents();
+
+    // walk the event stream: count clean clears, and demand a KOSHA_SPAWN
+    // lands on exactly the 5th, 10th, 15th... and on no other
+    let cleanClears = 0;
+    let spawns = 0;
+    for (const e of events) {
+      if (e.tag === 'OBSTACLE' && e.data.cleared === true) {
+        cleanClears += 1;
+        continue;
+      }
+      if (e.tag === 'KOSHA_SPAWN') {
+        spawns += 1;
+        expect(cleanClears).toBe(spawns * KOSHA.STREAK_TARGET);
+      }
+    }
+    expect(spawns).toBe(Math.floor(cleanClears / KOSHA.STREAK_TARGET));
+    expect(spawns).toBeGreaterThan(0);
+  });
+
+  it('the streak never displays at or past the target — it resets on the award', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    let jumpedFor = -1;
+    for (let f = 0; f < 12000 && !engine.isComplete(); f++) {
+      t += FRAME_MS;
+      const s = engine.getSceneState();
+      expect(s.cleanStreak).toBeGreaterThanOrEqual(0);
+      expect(s.cleanStreak).toBeLessThan(KOSHA.STREAK_TARGET);
+      expect(s.streakTarget).toBe(KOSHA.STREAK_TARGET);
+      const cue = s.cue;
+      engine.setControlInput({ crouchHeld: cue?.type === 'beam' });
+      if (cue?.type === 'hurdle' && cue.progress >= 0.8 && jumpedFor !== cue.obstacleId) {
+        jumpedFor = cue.obstacleId;
+        engine.setControlInput({ jumpPressed: true });
+      }
+      engine.processFrame([], t);
+    }
+    expect(engine.getSceneState().sealedKoshas).toBeGreaterThan(0);
+  });
+
+  it('collecting one grants exactly BONUS_MOHURS and increments the Kosha count', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    const koshaEvents = engine
+      .drainEvents()
+      .filter((e) => e.tag === 'KOSHA')
+      .map((e) => e.data as { total: number; bonus: number; coins: number });
+
+    expect(koshaEvents.length).toBeGreaterThan(0);
+    koshaEvents.forEach((k, i) => {
+      expect(k.bonus).toBe(KOSHA.BONUS_MOHURS);
+      expect(k.total).toBe(i + 1); // one at a time, in order
+    });
+    const raw = engine.getRawData();
+    expect(raw.sealedKoshas).toBe(koshaEvents.length);
+    expect(raw.sealedKoshas).toBe(engine.getSceneState().sealedKoshas);
+    // the bonus really did land in the engagement tally
+    expect(raw.coinsCollected).toBeGreaterThanOrEqual(
+      koshaEvents.length * KOSHA.BONUS_MOHURS,
+    );
+  });
+
+  it('a spawned Kosha is always gathered — the award is guaranteed', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    const events = engine.drainEvents();
+    const spawned = events.filter((e) => e.tag === 'KOSHA_SPAWN').length;
+    const gathered = events.filter((e) => e.tag === 'KOSHA').length;
+    // the only honest gap is a chest still in flight when the timer expires
+    expect(spawned - gathered).toBeLessThanOrEqual(1);
+    expect(gathered).toBeGreaterThan(0);
+  });
+
+  it('the collect lockout cannot revoke a Kosha (mohurs are still blocked)', () => {
+    // Force the lockout permanently ON. Ordinary mohurs must all stream past
+    // ungathered; the Koshas must still land. That is the exemption, proven —
+    // the streak is exactly what a stumble takes, so it must never also eat
+    // the prize that streak already paid for.
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    (engine as unknown as { isCollectLocked: () => boolean }).isCollectLocked = () => true;
+    runKeyboardBot(engine, 'perfect');
+    const events = engine.drainEvents();
+    expect(events.filter((e) => e.tag === 'COIN').length).toBe(0);
+    const gathered = events.filter((e) => e.tag === 'KOSHA').length;
+    expect(gathered).toBeGreaterThan(0);
+    // every mohur banked came from a Kosha bonus, nothing else
+    expect(engine.getRawData().coinsCollected).toBe(gathered * KOSHA.BONUS_MOHURS);
+  });
+
+  it('a stumble empties the streak and seals nothing', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'idle');
+    const events = engine.drainEvents();
+    expect(events.some((e) => e.tag === 'STUMBLE')).toBe(true);
+    expect(events.some((e) => e.tag === 'KOSHA_SPAWN')).toBe(false);
+    expect(events.some((e) => e.tag === 'KOSHA')).toBe(false);
+    expect(engine.getSceneState().cleanStreak).toBe(0);
+    expect(engine.getRawData().sealedKoshas).toBe(0);
+  });
+
+  it('reset() clears the streak, the Koshas and the pickups', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    expect(engine.getRawData().sealedKoshas).toBeGreaterThan(0);
+    engine.reset();
+    const s = engine.getSceneState();
+    expect(s.cleanStreak).toBe(0);
+    expect(s.sealedKoshas).toBe(0);
+    expect(s.coins.some((c) => c.kosha)).toBe(false);
+    expect(engine.getRawData().sealedKoshas).toBe(0);
+  });
+
+  it('neck mode seals Koshas exactly like body mode (mode-neutral award)', () => {
+    const head = new RunnerEngine({ controlMode: 'head', seed: 1337 });
+    runHeadBot(head);
+    const headEvents = head.drainEvents();
+    const headClears = headEvents.filter(
+      (e) => e.tag === 'OBSTACLE' && e.data.cleared === true,
+    ).length;
+    const headKoshas = head.getRawData().sealedKoshas ?? 0;
+
+    expect(head.getRawData().testId).toBe('KR1N');
+    expect(headClears).toBeGreaterThanOrEqual(KOSHA.STREAK_TARGET);
+    expect(headKoshas).toBeGreaterThan(0);
+    // the award follows the clean clears, not the control scheme
+    expect(headEvents.filter((e) => e.tag === 'KOSHA_SPAWN').length).toBe(
+      Math.floor(headClears / KOSHA.STREAK_TARGET),
+    );
+  });
+
+  it('the scene sees the chest as a Kosha, on the ground, ahead of the player', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(60_000);
+    engine.startPlaying();
+    let t = 1000;
+    let jumpedFor = -1;
+    let seen: { zAhead: number; aerial: boolean } | null = null;
+    for (let f = 0; f < 12000 && !engine.isComplete() && !seen; f++) {
+      t += FRAME_MS;
+      const s = engine.getSceneState();
+      const cue = s.cue;
+      engine.setControlInput({ crouchHeld: cue?.type === 'beam' });
+      if (cue?.type === 'hurdle' && cue.progress >= 0.8 && jumpedFor !== cue.obstacleId) {
+        jumpedFor = cue.obstacleId;
+        engine.setControlInput({ jumpPressed: true });
+      }
+      engine.processFrame([], t);
+      const k = engine.getSceneState().coins.find((c) => c.kosha && !c.collected);
+      if (k) seen = { zAhead: k.zAhead, aerial: k.aerial };
+    }
+    expect(seen).not.toBeNull();
+    expect(seen!.aerial).toBe(false); // ground level — no jump required
+    expect(seen!.zAhead).toBeGreaterThan(0);
+    expect(seen!.zAhead).toBeLessThanOrEqual(KOSHA.SPAWN_AHEAD_M);
+  });
+});
+
+// ── the headline guarantee: Koshas are invisible to the score ──────────────
+
+describe('sealed Koshas never affect the muscle-age score', () => {
+  it('identical raw data with different Koshas/mohurs → identical KR1 result', () => {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    runKeyboardBot(engine, 'perfect');
+    const raw = engine.getRawData();
+    // guard: if the feature ever stops firing this test must fail, not pass
+    // vacuously by comparing two runs that both earned nothing.
+    expect(raw.sealedKoshas).toBeGreaterThan(0);
+
+    for (const age of [25, 45, 65]) {
+      const none = computeKR1Score({ ...raw, sealedKoshas: 0, coinsCollected: 0 }, age);
+      const many = computeKR1Score({ ...raw, sealedKoshas: 99, coinsCollected: 999 }, age);
+      expect(many).toEqual(none);
+    }
   });
 });
 

@@ -324,6 +324,26 @@ export const COIN = {
   SPIN_RAD_S: 3,
 } as const;
 
+// ── Sealed Kosha (clean-streak reward) ───────────────────────────────────
+// ENGAGEMENT ONLY, exactly like mohurs: a Kosha is a retention reward and
+// NEVER enters the KR1/KR1N bands or musculage. A run with ten Koshas and a
+// run with none report the same muscle age for the same cleared/missed count.
+export const KOSHA = {
+  /** clean clears in a row that seal a Kosha (then the streak restarts) */
+  STREAK_TARGET: 5,
+  /** mohurs the sealed Kosha adds to the engagement tally */
+  BONUS_MOHURS: 5,
+  /** metres ahead of the 5th clear the chest is placed (centre path, ground).
+   *  Far enough to be seen coming, near enough that it is always reached. */
+  SPAWN_AHEAD_M: 10,
+  /** collect-pop duration, ms — grander than a mohur's 200ms */
+  POP_MS: 420,
+  /** how tall the chest floats, meters */
+  Y: 0.9,
+  /** visual spin, radians/second — slower than a mohur; it has weight */
+  SPIN_RAD_S: 1.2,
+} as const;
+
 // ── Camera feel ──────────────────────────────────────────────────────────
 export const CAMERA = {
   /** standing eye height, meters (scene units) */

@@ -49,6 +49,7 @@ import {
   LOCO,
   JUICE,
   STUMBLE,
+  KOSHA,
 } from '@/components/games/runner/runner-constants';
 import type { RunnerRawData } from '@/types/raw-data';
 
@@ -82,6 +83,8 @@ export interface SceneCoin {
   zAhead: number;
   aerial: boolean;
   collected: boolean;
+  /** true = sealed Kosha (chest mesh, bigger pop), false = ordinary mohur */
+  kosha: boolean;
 }
 
 /**
@@ -104,6 +107,12 @@ export interface RunnerSceneState {
   /** obstacles missed so far. Informational ONLY — a stumble never ends the
    *  run (there is no death state); the run ends when the timer expires. */
   stumbles: number;
+  /** consecutive clean clears so far — the HUD pips. ENGAGEMENT ONLY. */
+  cleanStreak: number;
+  /** clears needed to seal a Kosha (pip count) */
+  streakTarget: number;
+  /** Koshas sealed this run. ENGAGEMENT ONLY — never scored. */
+  sealedKoshas: number;
   /** true while the runner is tripping — collecting is disabled */
   stumbling: boolean;
   /** timestampMs of the last failed obstacle, 0 if none */
@@ -180,6 +189,9 @@ export class RunnerEngine implements GameEngine {
   /** consecutive cleared obstacles; a stumble breaks it. Never scored. */
   private cleanStreak = 0;
   private bestStreak = 0;
+  /** Koshas sealed this run — what the streak PAYS. Engagement only: this
+   *  never reaches kr1-local.ts, exactly like coinsCollected. */
+  private sealedKoshas = 0;
   /** next chunk index for the endless obstacle stream */
   private chunkIndex = 0;
 
@@ -400,6 +412,7 @@ export class RunnerEngine implements GameEngine {
     this.stumbleShakeT = 0;
     this.cleanStreak = 0;
     this.bestStreak = 0;
+    this.sealedKoshas = 0;
     // game clock (sessionMs/locomotionGating are config — they survive reset)
     this.gameTimeMs = 0;
     this.manuallyPaused = false;
@@ -854,15 +867,32 @@ export class RunnerEngine implements GameEngine {
         // THE cost of a stumble: you run straight past the mohurs. The plane
         // is still marked done, so they slide by ungathered rather than
         // queueing up to be collected once you recover.
-        const grabbed = this.isCollectLocked()
-          ? false
-          : coin.aerial
-            ? this.jumpY() >= COIN.AERIAL_JUMPY
-            : true;
+        // A sealed Kosha is EXEMPT from the lockout: the streak that earned it
+        // is exactly the thing a stumble takes away, so it must never also eat
+        // the prize that streak already paid for. Ground-level and centre-path,
+        // so it needs no action to collect — earning it IS the action.
+        const grabbed = coin.kosha
+          ? true
+          : this.isCollectLocked()
+            ? false
+            : coin.aerial
+              ? this.jumpY() >= COIN.AERIAL_JUMPY
+              : true;
         if (grabbed) {
           this.coinCollected[i] = true;
-          this.coinsCollected += 1;
-          this.emit('COIN', { id: coin.id, aerial: coin.aerial, total: this.coinsCollected });
+          if (coin.kosha) {
+            this.sealedKoshas += 1;
+            this.coinsCollected += KOSHA.BONUS_MOHURS;
+            this.emit('KOSHA', {
+              id: coin.id,
+              total: this.sealedKoshas,
+              bonus: KOSHA.BONUS_MOHURS,
+              coins: this.coinsCollected,
+            });
+          } else {
+            this.coinsCollected += 1;
+            this.emit('COIN', { id: coin.id, aerial: coin.aerial, total: this.coinsCollected });
+          }
         }
         // missed aerial: just slides past the player, no pop
       }
@@ -976,9 +1006,18 @@ export class RunnerEngine implements GameEngine {
     const ob = this.obstacles[i];
     this.resolved[i] = true;
     this.clearedFlags[i] = cleared;
+    // the streak PAYS: five clean in a row seals a Kosha, then it restarts so
+    // the next one can build. Reward only — the score never sees this. The
+    // spawn itself is deferred past the OBSTACLE emit below, so the drained
+    // log reads cause-then-effect: cleared → sealed.
+    let sealed = false;
     if (cleared) {
       this.cleanStreak += 1;
       if (this.cleanStreak > this.bestStreak) this.bestStreak = this.cleanStreak;
+      if (this.cleanStreak >= KOSHA.STREAK_TARGET) {
+        this.cleanStreak = 0;
+        sealed = true;
+      }
     } else {
       // MISS → stumble, never death. Whether this was a miss was decided
       // upstream by the detection; all that changed here is the consequence.
@@ -994,6 +1033,39 @@ export class RunnerEngine implements GameEngine {
       cleared,
       stumbles: this.stumbleCount(),
       ...logData,
+    });
+    if (sealed) this.spawnKosha();
+  }
+
+  /**
+   * Seal a Kosha: drop a brass chest in the path just ahead, centre and on
+   * the ground, so the streak's reward is SEEN coming and then grabbed. It
+   * rides the mohur pipeline (crossing, scene sync, windowing, disposal) with
+   * a flag, so there is no second pickup system to keep in step.
+   *
+   * Mode-neutral by construction — the caller is finishObstacle, downstream of
+   * every control mode, so five clean neck look-ups seal a Kosha exactly like
+   * five clean squats.
+   *
+   * ENGAGEMENT ONLY. Nothing here reaches the scoring path.
+   */
+  private spawnKosha(): void {
+    // id from the live array length, matching appendChunksIfNeeded's scheme:
+    // the next chunk's startId is read at call time, so ids stay unique and
+    // the seeded coin POSITIONS are untouched.
+    const coin: Coin = {
+      id: this.coins.length,
+      atDistance: this.distance + KOSHA.SPAWN_AHEAD_M,
+      aerial: false,
+      kosha: true,
+    };
+    this.coins.push(coin);
+    this.coinDone.push(false);
+    this.coinCollected.push(false);
+    this.emit('KOSHA_SPAWN', {
+      id: coin.id,
+      atDistance: coin.atDistance,
+      streakTarget: KOSHA.STREAK_TARGET,
     });
   }
 
@@ -1919,11 +1991,20 @@ export class RunnerEngine implements GameEngine {
       coins: this.coins.reduce<SceneCoin[]>((out, c, i) => {
         const zAhead = c.atDistance - this.distance;
         if (zAhead > -15 && zAhead < 130) {
-          out.push({ id: c.id, zAhead, aerial: c.aerial, collected: this.coinCollected[i] });
+          out.push({
+            id: c.id,
+            zAhead,
+            aerial: c.aerial,
+            collected: this.coinCollected[i],
+            kosha: c.kosha === true,
+          });
         }
         return out;
       }, []),
       coinsCollected: this.coinsCollected,
+      cleanStreak: this.cleanStreak,
+      streakTarget: KOSHA.STREAK_TARGET,
+      sealedKoshas: this.sealedKoshas,
       lowImpact: this.lowImpact,
       crouch: this.crouch,
       jumpY: this.jumpY(),
@@ -2030,6 +2111,7 @@ export class RunnerEngine implements GameEngine {
           ? 1
           : 0,
       coinsCollected: this.coinsCollected,
+      sealedKoshas: this.sealedKoshas,
       seed: this.seed,
       elapsed: finite(Math.round(elapsed)),
     };

@@ -30,6 +30,10 @@ function sfxForEvent(e: EngineEvent): SfxName | null {
   switch (e.tag) {
     case 'COIN':
       return 'coin';
+    case 'KOSHA':
+      // NOT gated by reduced motion: the reward and its sound always land,
+      // only the screen wash is suppressed. Same rule as 'stumble'.
+      return 'kosha';
     case 'JUMP_TRIGGER':
       return 'jump';
     case 'SQUAT_START':
@@ -164,6 +168,9 @@ export default function RunnerLayer({
   /** stumble cue: localized dust-tone edge vignette; 0 = never fired.
    *  Fires in every mode on a missed obstacle (pose, head and keyboard). */
   const [fxStumble, setFxHit] = useState(0);
+  /** sealed-Kosha payoff: a warm brass wash from the edges; 0 = never fired.
+   *  Motion only — the mohurs, the count and the sound land regardless. */
+  const [fxKosha, setFxKosha] = useState(0);
   /** head-mode edge-vignette pulse: 0 = off, else {t, color} */
   const [fxPulse, setFxPulse] = useState<{ t: number; color: string } | null>(null);
   const [reducedFx] = useState(
@@ -401,6 +408,8 @@ export default function RunnerLayer({
             setFxHit(now);
             setFxDust(now); // scuffed grit as the boot skids
           }
+          // sealed Kosha — all modes, the mirror image of the stumble cue
+          if (e.tag === 'KOSHA') setFxKosha(now);
           if (controlMode === 'pose') {
             if (e.tag === 'JUMP_TRIGGER') setFxJump(now);
             if (e.tag === 'LAND') setFxDust(now);
@@ -482,6 +491,9 @@ export default function RunnerLayer({
           lowImpact: s.lowImpact,
           headMode: controlMode === 'head',
           coins: s.coinsCollected,
+          cleanStreak: s.cleanStreak,
+          streakTarget: s.streakTarget,
+          sealedKoshas: s.sealedKoshas,
           timerMs: engine.getTimerRemainingMs(),
           sessionMs: sessionSec > 0 ? sessionSec * 1000 : null,
         });
@@ -634,6 +646,20 @@ export default function RunnerLayer({
           <div className="absolute inset-y-0 right-0 w-[18vw] bg-gradient-to-l from-[#8a5a2b]/60 to-transparent" />
           <div className="absolute inset-x-0 top-0 h-[16vh] bg-gradient-to-b from-[#8a5a2b]/50 to-transparent" />
           <div className="absolute inset-x-0 bottom-0 h-[16vh] bg-gradient-to-t from-[#8a5a2b]/50 to-transparent" />
+        </div>
+      )}
+      {/* sealed Kosha: the mirror of the stumble vignette — same localized,
+          opacity-only construction, but brass instead of grit, and it lingers
+          where the stumble stings and goes. A reward should be dwelt on. */}
+      {fxKosha > 0 && (
+        <div
+          key={`k${fxKosha}`}
+          onAnimationEnd={() => setFxKosha(0)}
+          className="pointer-events-none absolute inset-0 z-20 animate-fx-gold [will-change:opacity]"
+        >
+          <div className="absolute inset-y-0 left-0 w-[20vw] bg-gradient-to-r from-brass/45 to-transparent" />
+          <div className="absolute inset-y-0 right-0 w-[20vw] bg-gradient-to-l from-brass/45 to-transparent" />
+          <div className="absolute inset-x-0 bottom-0 h-[18vh] bg-gradient-to-t from-brass-light/35 to-transparent" />
         </div>
       )}
       {fxDust > 0 && (
