@@ -24,59 +24,60 @@ import type {
   SceneCoin,
 } from '@/modules/game/engines/runner-engine';
 import { COIN, KOSHA } from './runner-constants';
+import {
+  DAWN,
+  LOHIT_GREEN,
+  PROP_ROW_SIZES,
+  actForWrap,
+  actWeights,
+  propKindFor,
+  propKindsForSlot,
+  propLap,
+  type ActWeights,
+  type PropKind,
+  type PropRow,
+} from './runner-acts';
 
 const FOG_NEAR = 30;
 const FOG_FAR = 95;
 const LOOP_LEN = 200; // prop recycling loop, meters
 const ROAD_W = 8;
 
-/**
- * "The Final Run" dawn ramp — Kaho (dark) → Dong plateau (first light).
- *
- * The whole level is ONE 60-second colour ramp; it is the signature of the
- * re-skin. Driven by run progress (0..1) handed in by the layer — see
- * update(). Restraint early is deliberate: ambient starts very low so the
- * sunrise has somewhere to climb to.
- *
- * The mid stops (0.35/0.60) exist so that a run ending EARLY on lives still
- * freezes on a presentable frame instead of a half-saffron smear.
- */
-type DawnStop = {
-  p: number;
-  sky: number;
-  sunC: number;
-  sunI: number;
-  ambC: number;
-  ambI: number;
-  /** sun disc height; stays behind the ridge line until ~0.7 */
-  sunY: number;
-};
-const DAWN: DawnStop[] = [
-  // NIGHT — held. Light tints stay COOL blue-grey on purpose: the trail
-  // texture is warm gravel, and a warm key light this early made the whole
-  // ground read amber long before the sun was meant to clear the ridge.
-  // ambI never drops below ~0.34 — the obstacles must stay readable in the
-  // dark or a missed cue costs a real life (this game is also an assessment).
-  { p: 0.0, sky: 0x10162e, sunC: 0x1b2742, sunI: 0.12, ambC: 0x2b3a52, ambI: 0.34, sunY: -10 },
-  { p: 0.45, sky: 0x141b33, sunC: 0x24304d, sunI: 0.18, ambC: 0x30405e, ambI: 0.4, sunY: -8 },
-  // FIRST LIGHT
-  { p: 0.6, sky: 0x2b3a4e, sunC: 0x53637a, sunI: 0.42, ambC: 0x4a5a6e, ambI: 0.55, sunY: -4 },
-  // pre-dawn violet. Without this stop the blue→saffron lerp passes straight
-  // through a muddy grey-brown; real dawn goes indigo → rose → orange.
-  { p: 0.68, sky: 0x6b4a5e, sunC: 0x9c6a72, sunI: 0.8, ambC: 0x6d5566, ambI: 0.74, sunY: 4 },
-  // SUNRISE — the rim clears the ridge here, in the last quarter
-  { p: 0.75, sky: 0xe8913a, sunC: 0xffb066, sunI: 1.35, ambC: 0xbe8a62, ambI: 0.95, sunY: 20 },
-  { p: 0.9, sky: 0xf5c542, sunC: 0xffd07a, sunI: 1.75, ambC: 0xdcb679, ambI: 1.2, sunY: 31 },
-  // FINISH — warm gold, intensity CAPPED. Not white: an over-exposed cream
-  // frame throws away the payoff the whole ramp was built for.
-  { p: 1.0, sky: 0xffcb5c, sunC: 0xffdf9a, sunI: 1.95, ambC: 0xf0c98a, ambI: 1.35, sunY: 40 },
-];
-/** hard translucent green of the Lohit — NOT blue, NOT plains-brown */
-const LOHIT_GREEN = 0x1e7a5e;
+// The dawn ramp (DAWN / DawnStop) and LOHIT_GREEN now live in runner-acts.ts
+// alongside the act bounds. They are pure data, and keeping them in a
+// DOM-free module is what lets the tests assert that the ramp lines up with
+// the acts — that night ends where Kaho ends, that the Crossing gets a first-
+// light stop of its own, that ambient never drops below the obstacle-
+// readability floor, and that the sun stays behind the ridge until Dong.
+// (runner-scene.ts imports three and touches the DOM, so nothing in here can
+// be unit-tested.)
 
 function lerpNum(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
+
+/**
+ * One recycled trailside slot. The slot GROUP is the only thing positioned;
+ * its variants sit at local origin with exactly one visible at a time, so the
+ * per-frame cost stays at one position.z write per slot, as it always was.
+ *
+ * Variants are pre-built once in buildWorld and only toggled — never created
+ * or destroyed mid-run. That preserves this file's central guarantee that
+ * nothing is added to or removed from the scene after buildWorld, which is
+ * what keeps the 60fps loop allocation-free.
+ */
+type PropSlot = {
+  mesh: THREE.Object3D;
+  baseZ: number;
+  /** which lap of the loop this slot is on; a change means it just teleported
+   *  ~190m ahead, far beyond FOG_FAR — the only moment it may change identity */
+  lastLap: number;
+  /** null for act-invariant slots (row C), which never swap */
+  variants: Map<PropKind, THREE.Object3D> | null;
+  row: PropRow;
+  idx: number;
+  kind: PropKind;
+};
 
 export class RunnerScene {
   private renderer: THREE.WebGLRenderer;
@@ -92,11 +93,31 @@ export class RunnerScene {
   private sunDiscMat!: THREE.MeshBasicMaterial;
   private ridgeMat!: THREE.MeshBasicMaterial;
   private mistMat!: THREE.MeshBasicMaterial;
+  // ── act-look refs (written once per frame by applyActLook; nothing
+  // allocated). All SHARED per-instance materials, the ridgeMat pattern: one
+  // write tints every copy. They are instance fields and NOT module
+  // singletons on purpose — dispose() traverses and disposeObject() disposes
+  // materials, so a module-level material would be destroyed on unmount and
+  // reused dead by StrictMode's second mount. (The bark/bamboo/flag TEXTURES
+  // survive that path because disposing a Material does not dispose its map;
+  // a shared material has no such protection.)
+  private roadMat!: THREE.MeshLambertMaterial;
+  private lohitMat!: THREE.MeshLambertMaterial;
+  private barMat!: THREE.MeshLambertMaterial;
+  private railMat!: THREE.MeshBasicMaterial;
+  private railTex!: THREE.CanvasTexture;
+  private rails: THREE.Mesh[] = [];
+  private ridgePeaks: THREE.Mesh[] = [];
+  /** preallocated act blend weights — actWeights() writes into this */
+  private actW: ActWeights = { w1: 1, w2: 0, w3: 0 };
+  /** last ridge-broadening amount actually written (gates the scale writes) */
+  private lastRidgeW3 = -1;
   /** scratch colours — reused every frame so applyDawn allocates nothing */
   private cA = new THREE.Color();
   private cB = new THREE.Color();
   private cSky = new THREE.Color();
-  private props: { mesh: THREE.Object3D; baseZ: number }[] = [];
+  private cAct = new THREE.Color();
+  private props: PropSlot[] = [];
   private obstacleMeshes = new Map<number, THREE.Object3D>();
   private coinMeshes = new Map<number, THREE.Object3D>();
   /** collect-pop animations: coin id → pop start (ms) */
@@ -170,10 +191,12 @@ export class RunnerScene {
     this.roadTex.wrapS = THREE.RepeatWrapping;
     this.roadTex.wrapT = THREE.RepeatWrapping;
     this.roadTex.repeat.set(1, 24);
-    this.road = new THREE.Mesh(
-      new THREE.PlaneGeometry(ROAD_W, LOOP_LEN),
-      new THREE.MeshLambertMaterial({ map: this.roadTex }),
-    );
+    // the road MATERIAL is act-tinted (Lambert multiplies the map), never the
+    // texture: redrawing the canvas at a boundary would change the entire
+    // visible trail in one frame — exactly the pop the whole swap-on-wrap
+    // design exists to avoid. repeat stays (1,24) or the trail stretches.
+    this.roadMat = new THREE.MeshLambertMaterial({ map: this.roadTex });
+    this.road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_W, LOOP_LEN), this.roadMat);
     this.road.rotation.x = -Math.PI / 2;
     this.road.position.set(0, 0, -LOOP_LEN / 2 + 10);
     this.scene.add(this.road);
@@ -181,50 +204,70 @@ export class RunnerScene {
     // gravel sandbars flanking the trail + the braided Lohit channels beyond.
     // Lane geometry and positions are UNCHANGED — this is paint only, but it
     // is what makes the three lanes read as channel / gravel bar / channel.
+    // ONE shared material each, so the act ramp tints both sides with a
+    // single write per frame (the ridgeMat pattern).
+    this.barMat = new THREE.MeshLambertMaterial({ color: 0x9a9384 });
+    this.lohitMat = new THREE.MeshLambertMaterial({
+      color: LOHIT_GREEN,
+      transparent: true,
+      opacity: 0.88,
+    });
     for (const side of [-1, 1]) {
-      const bar = new THREE.Mesh(
-        new THREE.PlaneGeometry(3, LOOP_LEN),
-        new THREE.MeshLambertMaterial({ color: 0x9a9384 }),
-      );
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(3, LOOP_LEN), this.barMat);
       bar.rotation.x = -Math.PI / 2;
       bar.position.set(side * (ROAD_W / 2 + 1.5), 0.02, -LOOP_LEN / 2 + 10);
       this.scene.add(bar);
 
-      const channel = new THREE.Mesh(
-        new THREE.PlaneGeometry(40, LOOP_LEN),
-        new THREE.MeshLambertMaterial({ color: LOHIT_GREEN, transparent: true, opacity: 0.88 }),
-      );
+      const channel = new THREE.Mesh(new THREE.PlaneGeometry(40, LOOP_LEN), this.lohitMat);
       channel.rotation.x = -Math.PI / 2;
       channel.position.set(side * (ROAD_W / 2 + 3 + 20), -0.01, -LOOP_LEN / 2 + 10);
       this.scene.add(channel);
     }
 
+    // Act 2 guard-rails — the bridge deck. PAINT ONLY: lane width (ROAD_W),
+    // obstacle spans, camera height and every clearance are untouched. The
+    // rails sit just outboard of the trail and inboard of the sandbars, so
+    // with the Act-2 water treatment the trail READS as a narrow deck over
+    // the river without a single measurement changing.
+    this.railTex = makeRailTexture();
+    this.railTex.wrapS = THREE.RepeatWrapping;
+    this.railTex.repeat.set(40, 1);
+    this.railMat = new THREE.MeshBasicMaterial({
+      map: this.railTex,
+      transparent: true,
+      alphaTest: 0.4,
+      side: THREE.DoubleSide,
+      opacity: 0,
+    });
+    for (const side of [-1, 1]) {
+      const rail = new THREE.Mesh(new THREE.PlaneGeometry(LOOP_LEN, 0.55), this.railMat);
+      rail.rotation.y = Math.PI / 2;
+      rail.position.set(side * (ROAD_W / 2 + 0.9), 0.42, -LOOP_LEN / 2 + 10);
+      rail.visible = false; // hidden outside the Crossing — 0 extra draw calls
+      this.scene.add(rail);
+      this.rails.push(rail);
+    }
+
     // recycled trailside props. Counts and x/z placement are kept from the
     // city build so the draw count does not grow — only the art changed.
     // (part counts per prop are LOWER than the city's, see the factories)
-    for (let i = 0; i < 14; i++) {
+    //
+    // THREE-ACT: each slot now pre-builds every variant it will ever need and
+    // shows exactly one. Nothing is created or destroyed after buildWorld —
+    // that invariant is what keeps the 60fps loop allocation-free — and a
+    // slot only changes which variant is visible at the instant it wraps ~190m
+    // ahead, far beyond FOG_FAR, so no swap is ever on screen.
+    for (let i = 0; i < PROP_ROW_SIZES.A; i++) {
       const side = i % 2 === 0 ? -1 : 1;
-      // ONE gonpa per loop as a landmark; the rest is pine slope and cane.
-      // (an earlier build put a lit-window block every 4th prop, which read
-      // as a city skyline — the whole thing this re-skin exists to remove)
-      const b = i === 9 ? makeGonpa() : i % 3 === 1 ? makeBamboo(i) : makePine(i);
-      b.position.x = side * (ROAD_W / 2 + 10 + (i % 4) * 3);
-      this.addProp(b, (i / 14) * LOOP_LEN);
+      this.addSlot('A', i, (i / PROP_ROW_SIZES.A) * LOOP_LEN, side * (ROAD_W / 2 + 10 + (i % 4) * 3));
     }
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < PROP_ROW_SIZES.B; i++) {
       const side = i % 2 === 0 ? -1 : 1;
-      // alternating prayer-flag lines and mani-stone stacks at the trail edge
-      const t = i % 2 === 0 ? makePrayerFlags() : makeManiStack();
-      t.position.x = side * (ROAD_W / 2 + 4.2);
-      this.addProp(t, (i / 10) * LOOP_LEN + 7);
+      this.addSlot('B', i, (i / PROP_ROW_SIZES.B) * LOOP_LEN + 7, side * (ROAD_W / 2 + 4.2));
     }
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < PROP_ROW_SIZES.C; i++) {
       const side = i % 2 === 0 ? -1 : 1;
-      // milestone stones counting the trail down, with the odd butter lamp
-      const l = makeTrailMarker(i);
-      l.position.x = side * (ROAD_W / 2 + 2.2);
-      l.scale.x = side;
-      this.addProp(l, (i / 8) * LOOP_LEN + 3);
+      this.addSlot('C', i, (i / PROP_ROW_SIZES.C) * LOOP_LEN + 3, side * (ROAD_W / 2 + 2.2), side);
     }
 
     // the ridge line — one SHARED material so the dawn ramp tints all ten
@@ -244,6 +287,8 @@ export class RunnerScene {
       peak.position.set(-78 + i * 18, 4, -130);
       peak.rotation.y = Math.PI / 4;
       this.scene.add(peak);
+      // kept so Dong can broaden the ridge into a plateau silhouette
+      this.ridgePeaks.push(peak);
     }
 
     // NOTE: the damage cue is no longer a full-screen red plane parented to
@@ -254,9 +299,81 @@ export class RunnerScene {
     this.scene.add(this.camera);
   }
 
-  private addProp(mesh: THREE.Object3D, baseZ: number): void {
-    this.scene.add(mesh);
-    this.props.push({ mesh, baseZ });
+  /** the art for one prop kind. Kept as a single dispatcher so the act plan
+   *  in runner-acts.ts is the ONLY place that decides what stands where. */
+  private makeVariant(kind: PropKind, i: number): THREE.Object3D {
+    switch (kind) {
+      case 'gonpa':
+        return makeGonpa();
+      case 'bamboo':
+        return makeBamboo(i);
+      case 'flags':
+        return makePrayerFlags();
+      case 'mani':
+        return makeManiStack();
+      case 'marker':
+        return makeTrailMarker(i);
+      case 'scree':
+        return makeScree(i);
+      case 'pine':
+      default:
+        return makePine(i);
+    }
+  }
+
+  /**
+   * Build one recycled slot: a positioned group holding every variant that
+   * slot will ever need, with the Act-1 variant visible.
+   *
+   * Act 1's plan reproduces the shipped world exactly (pinned by a test), so
+   * the first frame a player sees is unchanged by this feature.
+   */
+  private addSlot(row: PropRow, i: number, baseZ: number, x: number, scaleX = 1): void {
+    const kinds = propKindsForSlot(row, i);
+    const group = new THREE.Group();
+    group.position.x = x;
+    group.scale.x = scaleX;
+
+    let variants: Map<PropKind, THREE.Object3D> | null = null;
+    const act1 = propKindFor(row, i, 1);
+    if (kinds.length === 1) {
+      // act-invariant slot (row C): no map, no toggling, no extra meshes
+      group.add(this.makeVariant(kinds[0], i));
+    } else {
+      variants = new Map();
+      for (const kind of kinds) {
+        const v = this.makeVariant(kind, i);
+        v.visible = kind === act1;
+        // variants never move relative to their slot — skip the per-frame
+        // matrix compose for all ~30 extra groups
+        v.updateMatrix();
+        v.matrixAutoUpdate = false;
+        variants.set(kind, v);
+        group.add(v);
+      }
+    }
+
+    this.scene.add(group);
+    this.props.push({
+      mesh: group,
+      baseZ,
+      // seeded from the same function the loop uses, so frame one computes an
+      // identical lap and can never register a false wrap
+      lastLap: propLap(0, baseZ, LOOP_LEN),
+      variants,
+      row,
+      idx: i,
+      kind: act1,
+    });
+  }
+
+  /** Swap which variant a slot shows. Only ever called on a wrap, when the
+   *  slot is ~190m ahead and fully fogged out — so no swap is ever seen. */
+  private setSlotKind(p: PropSlot, kind: PropKind): void {
+    if (!p.variants || kind === p.kind) return;
+    p.variants.get(p.kind)!.visible = false;
+    p.variants.get(kind)!.visible = true;
+    p.kind = kind;
   }
 
   // ── per-frame update (reads engine state, renders) ────────────────────
@@ -270,6 +387,7 @@ export class RunnerScene {
     if (this.disposed) return;
 
     this.applyDawn(progress);
+    this.applyActLook(progress);
 
     // visual-scroll follower (see field comment): pass legitimate per-frame
     // motion 1:1, smooth only the super-speed excess of a frame hitch
@@ -297,12 +415,23 @@ export class RunnerScene {
     // road scroll
     this.roadTex.offset.y = (d / LOOP_LEN) * 24;
 
-    // recycle props along the loop
+    // recycle props along the loop.
+    //
+    // Placement is arithmetically IDENTICAL to the old `%` form (pinned by a
+    // regression test over 10k sampled positions — the old `z ? z : LOOP_LEN`
+    // special case is exactly the frac===0 case and is absorbed here). It is
+    // rewritten only so the LAP COUNT is observable: a lap change is the
+    // instant a prop teleports from 10m behind the camera to ~190m ahead,
+    // which is the one moment it can change what it is without being seen.
+    const wrapAct = actForWrap(progress);
     for (const p of this.props) {
-      let z = (p.baseZ - d) % LOOP_LEN;
-      if (z < 0) z += LOOP_LEN;
-      // z in [0, LOOP_LEN): place ahead of player from -10 to -(LOOP_LEN-10)
-      p.mesh.position.z = -(z ? z : LOOP_LEN) + 10;
+      const rel = d - p.baseZ;
+      const lap = Math.floor(rel / LOOP_LEN);
+      p.mesh.position.z = rel - lap * LOOP_LEN - LOOP_LEN + 10;
+      if (lap !== p.lastLap) {
+        p.lastLap = lap;
+        this.setSlotKind(p, propKindFor(p.row, p.idx, wrapAct));
+      }
     }
 
     // clouds drift slowly
@@ -360,9 +489,71 @@ export class RunnerScene {
 
     // ridge reads as a silhouette against whatever the sky is doing
     this.ridgeMat.color.copy(this.cSky).multiplyScalar(0.32);
-    // mist only becomes visible once there is light to catch
+    // mist only becomes visible once there is light to catch.
+    // (applyActLook runs straight after this and scales the opacity per act —
+    // Kaho thin, the Crossing thick with river fog, Dong cleared.)
     this.mistMat.color.copy(this.cSky).lerp(this.cA.setHex(0xffffff), 0.25);
     this.mistMat.opacity = 0.12 + p * 0.34;
+  }
+
+  /**
+   * Kaho → Lohit Paar → Dong: the CONTINUOUS half of the three-act journey.
+   *
+   * The props can only change out of sight, which on a short run means the
+   * prop layer converts gradually — so these channels are what actually carry
+   * the act read. They cross-fade smoothly through every boundary (see
+   * actWeights) so nothing ever cuts.
+   *
+   * Same discipline as applyDawn: reuses the scratch colours, allocates
+   * nothing, ~6 colour writes and a handful of floats per frame. It is PAINT —
+   * no geometry moves, no lane width changes, nothing feeds the engine.
+   */
+  private applyActLook(progress: number): void {
+    actWeights(progress, this.actW);
+    const { w1, w2, w3 } = this.actW;
+
+    // the Lohit itself: barely sensed in the dark above Kaho, the full hard
+    // green of the Crossing, then falling away below the Dong plateau
+    this.lohitMat.opacity = w1 * 0.28 + w2 * 0.95 + w3 * 0.55;
+    this.cAct.setHex(LOHIT_GREEN);
+    // above the village it is nearly lost in the night; on the plateau it
+    // takes the warm sky rather than staying river-cold
+    this.cAct.lerp(this.cSky, w1 * 0.55 + w3 * 0.4);
+    this.lohitMat.color.copy(this.cAct);
+
+    // gravel bars: dark → pale wet gravel at the crossing → gold-lit
+    this.barMat.color
+      .setHex(0x4a463f)
+      .multiplyScalar(w1)
+      .add(this.cA.setHex(0xb5ad9c).multiplyScalar(w2))
+      .add(this.cB.setHex(0xc9b48a).multiplyScalar(w3));
+
+    // the trail underfoot: cool stone → wet stone → warm
+    this.roadMat.color
+      .setHex(0x8f97a8)
+      .multiplyScalar(w1)
+      .add(this.cA.setHex(0xa9b4b0).multiplyScalar(w2))
+      .add(this.cB.setHex(0xd9c39a).multiplyScalar(w3));
+
+    // river fog is the Crossing's signature; the plateau is clear air
+    this.mistMat.opacity *= w1 * 0.6 + w2 * 1.6 + w3 * 0.7;
+
+    // guard-rails belong to the bridge and nowhere else. Hidden below a
+    // whisker of opacity so they cost ZERO draw calls in Kaho and Dong.
+    const railOpacity = w2;
+    this.railMat.opacity = railOpacity;
+    const railsOn = railOpacity > 0.01;
+    for (const rail of this.rails) rail.visible = railsOn;
+
+    // Dong opens out: the ridge broadens and flattens into a plateau
+    // silhouette. Gated — this is 10 matrix-dirtying writes, and it only
+    // needs to move while w3 is actually changing (~2% of frames).
+    if (Math.abs(w3 - this.lastRidgeW3) > 0.002) {
+      this.lastRidgeW3 = w3;
+      const sx = 1 + w3 * 0.35;
+      const sy = 1 - w3 * 0.2;
+      for (const peak of this.ridgePeaks) peak.scale.set(sx, sy, 1);
+    }
   }
 
   /** Smoothed visual velocity (m/s) — same signal as the scroll follower;
@@ -732,6 +923,67 @@ function makePine(i: number): THREE.Object3D {
   canopy.position.y = trunkH + canopyH / 2 - trunkH * 0.3;
   group.add(canopy);
   return group;
+}
+
+/**
+ * Scree and silver grass — Dong's slopes, where the pine forest gives out.
+ *
+ * Deliberately LOW and broken up: past the treeline the ground stops rising
+ * into the frame, which is what makes the plateau read as open country rather
+ * than as a valley that lost its trees. Two boulders and a tuft, one shared
+ * material each so the extra variants cost almost nothing.
+ */
+function makeScree(i: number): THREE.Object3D {
+  const group = new THREE.Group();
+  const rockMat = new THREE.MeshLambertMaterial({ color: 0x6b6459 });
+  const s = 1.6 + (i % 4) * 0.7;
+  const a = new THREE.Mesh(new THREE.DodecahedronGeometry(s * 0.6, 0), rockMat);
+  a.position.set(0, s * 0.4, 0);
+  a.rotation.set(i * 0.7, i * 1.3, i * 0.4);
+  group.add(a);
+  const b = new THREE.Mesh(new THREE.DodecahedronGeometry(s * 0.35, 0), rockMat);
+  b.position.set(s * 0.9, s * 0.22, -s * 0.5);
+  b.rotation.set(i * 1.1, i * 0.5, i * 0.9);
+  group.add(b);
+  // a tuft of silver grass — the only thing that catches the low sun up here
+  const tuft = new THREE.Mesh(
+    new THREE.ConeGeometry(s * 0.3, s * 0.8, 5),
+    new THREE.MeshLambertMaterial({ color: 0x8d8a6d }),
+  );
+  tuft.position.set(-s * 0.8, s * 0.4, s * 0.3);
+  group.add(tuft);
+  return group;
+}
+
+/**
+ * Guard-rail texture for the Crossing — posts and two wire-rope lines on a
+ * transparent ground, tiled along the deck and UV-scrolled with the road.
+ *
+ * A texture rather than geometry on purpose: two planes wearing this cost 2
+ * draw calls instead of ~80 posts, and they scroll for free off the same
+ * expression the trail already uses.
+ */
+function makeRailTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 32;
+  const g = c.getContext('2d')!;
+  g.clearRect(0, 0, 64, 32);
+  // two wire ropes
+  g.strokeStyle = '#9aa3a8';
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(0, 7);
+  g.lineTo(64, 7);
+  g.moveTo(0, 18);
+  g.lineTo(64, 18);
+  g.stroke();
+  // a weathered timber post
+  g.fillStyle = '#5a4a35';
+  g.fillRect(6, 0, 7, 32);
+  g.fillStyle = '#6d5a41';
+  g.fillRect(6, 0, 3, 32);
+  return new THREE.CanvasTexture(c);
 }
 
 /**

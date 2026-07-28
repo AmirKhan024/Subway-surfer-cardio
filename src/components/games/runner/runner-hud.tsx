@@ -13,6 +13,7 @@ import type { CueState } from '@/modules/game/engines/runner-engine';
 import { getReadyCueImage } from '@/lib/media/cue-preloader';
 import { cueLabel } from '@/lib/media/mode-media';
 import { COLORS } from './runner-constants';
+import { actForProgress, actMeta, type ActId } from './runner-acts';
 
 export interface HudState {
   distance: number;
@@ -185,6 +186,71 @@ function StreakPips({
   );
 }
 
+/**
+ * Act title card — "Kaho", "Lohit Paar", "Dong" with a one-line beat.
+ *
+ * NON-BLOCKING by construction: pointer-events-none, no state read by the
+ * game loop, and it unmounts itself on animationend. The run never pauses.
+ *
+ * LOWER THIRD on purpose. Obstacles are read in the centre and upper-centre
+ * of the frame — by the time one reaches this band the decision window has
+ * long closed. Placing the card here is what keeps obstacle TIMING untouched:
+ * nothing is delayed or moved to make room for it.
+ *
+ * Reduced motion swaps to an opacity-only keyframe of the SAME duration
+ * rather than removing the animation — a card whose animation never runs
+ * would never fire animationend, and would sit on screen for the whole run.
+ */
+export function ActTitleCard({
+  act,
+  reduced,
+  onDone,
+}: {
+  act: ActId;
+  reduced: boolean;
+  onDone: () => void;
+}) {
+  const m = actMeta(act);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      onAnimationEnd={onDone}
+      className={`pointer-events-none absolute left-1/2 z-30 w-max max-w-[62vw] rounded-xl
+                  border border-brass/30 bg-teak-deep/75 px-4 py-2 text-center backdrop-blur-md
+                  shadow-glass-sm sm:max-w-sm [will-change:opacity,transform]
+                  ${reduced ? 'animate-act-card-flat' : 'animate-act-card'}`}
+      // clears the disclaimer (bottom 0.5rem, ~1.75rem tall) and sits inboard
+      // of the mute chip at bottom-10 right-3
+      style={{ bottom: 'calc(2.75rem + env(safe-area-inset-bottom, 0px))' }}
+    >
+      <div
+        className="text-[10px] font-bold tracking-[0.28em]"
+        style={{ color: m.accent }}
+      >
+        ACT {m.numeral}
+      </div>
+      <div className="font-heading text-lg font-bold text-brass-pale">{m.name}</div>
+      <div className="text-[11px] text-brass-pale/70">{m.beat}</div>
+    </div>
+  );
+}
+
+/** Where you are, under the milestone stone. Brass and teak, one line. */
+function ActChip({ act }: { act: ActId }) {
+  const m = actMeta(act);
+  return (
+    <div
+      className="rounded-lg border border-brass/25 bg-teak-deep/70 px-1.5 py-0.5 text-center
+                 text-[9px] font-bold uppercase tracking-[0.16em] backdrop-blur-md"
+      style={{ color: m.accent }}
+      title={m.beat}
+    >
+      {m.numeral} · {m.name}
+    </div>
+  );
+}
+
 export function ActionCue({
   cue,
   lowImpact,
@@ -239,6 +305,10 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
     hud.timerMs !== null && hud.sessionMs !== null && hud.sessionMs > 0
       ? Math.min(1, Math.max(0, 1 - hud.timerMs / hud.sessionMs))
       : null;
+  // where you are on the journey — derived from the SAME progress value the
+  // prayer flags and the dawn ramp read, so nothing new is plumbed through
+  // HudState and there is one source of truth for the acts
+  const act = progress === null ? null : actForProgress(progress);
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
       {/* session progress — a line of prayer flags, one per 10% */}
@@ -262,7 +332,12 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
         className="absolute left-3 flex max-w-[38vw] flex-wrap gap-1.5 sm:max-w-none sm:gap-2"
         style={{ top: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
       >
-        <MilestoneStone metres={Math.floor(hud.distance)} />
+        {/* the milestone stone and the place you are passing through, as a
+            column — so naming the act costs no extra width in the cluster */}
+        <div className="flex flex-col items-stretch gap-1">
+          <MilestoneStone metres={Math.floor(hud.distance)} />
+          {act !== null && <ActChip act={act} />}
+        </div>
         <Chip>
           <span
             className="flex items-center gap-1 text-brass-pale/60"

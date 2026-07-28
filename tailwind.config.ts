@@ -137,6 +137,26 @@ const config: Config = {
           '55%': { opacity: '0.85' },
           '100%': { opacity: '0' },
         },
+        // act title card: rise, hold, fade. Transform+opacity only, partial
+        // screen, so it composites like every other overlay here.
+        actCard: {
+          '0%': { opacity: '0', transform: 'translate(-50%, 8px)' },
+          '12%': { opacity: '1', transform: 'translate(-50%, 0)' },
+          '80%': { opacity: '1', transform: 'translate(-50%, 0)' },
+          '100%': { opacity: '0', transform: 'translate(-50%, -4px)' },
+        },
+        // reduced motion: opacity only, but the SAME duration on purpose —
+        // the card unmounts on animationend, so an animation that never runs
+        // would leave it on screen forever.
+        actCardFlat: {
+          // the -50% centering lives in the keyframe, not in a Tailwind
+          // translate class: an animated `transform` replaces the class's
+          // outright, so mixing the two would un-center the card
+          '0%': { opacity: '0', transform: 'translate(-50%, 0)' },
+          '12%': { opacity: '1', transform: 'translate(-50%, 0)' },
+          '80%': { opacity: '1', transform: 'translate(-50%, 0)' },
+          '100%': { opacity: '0', transform: 'translate(-50%, 0)' },
+        },
         cuePop: {
           '0%': { transform: 'scale(1.18)' },
           '100%': { transform: 'scale(1)' },
@@ -152,6 +172,8 @@ const config: Config = {
         'fx-edge': 'fxEdge 0.35s ease-out forwards',
         'fx-pulse': 'fxPulse 0.4s ease-out forwards',
         'fx-gold': 'fxGold 0.55s ease-out forwards',
+        'act-card': 'actCard 2.6s ease-out forwards',
+        'act-card-flat': 'actCardFlat 2.6s ease-out forwards',
         'cue-pop': 'cuePop 0.2s ease-out',
       },
     },

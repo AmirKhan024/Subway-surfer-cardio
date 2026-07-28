@@ -18,7 +18,8 @@ import type { PoseLandmarks } from '@/modules/pose/types';
 import type { CalibrationStatus } from '@/modules/game/engines/types';
 import { Pause, Volume2, VolumeX } from 'lucide-react';
 import { RunnerScene } from './runner-scene';
-import RunnerHUD, { type HudState } from './runner-hud';
+import RunnerHUD, { ActTitleCard, type HudState } from './runner-hud';
+import { actForProgress, type ActId } from './runner-acts';
 import { useCamera } from '@/lib/mediapipe/use-camera';
 import { usePoseDetector } from '@/lib/mediapipe/use-pose';
 import { klog } from '@/lib/debug/run-logger';
@@ -171,6 +172,11 @@ export default function RunnerLayer({
   /** sealed-Kosha payoff: a warm brass wash from the edges; 0 = never fired.
    *  Motion only — the mohurs, the count and the sound land regardless. */
   const [fxKosha, setFxKosha] = useState(0);
+  /** which act the run is in, for change-detection only — the act is derived
+   *  from progress every frame but must only reach React when it CHANGES */
+  const actRef = useRef<ActId | 0>(0);
+  /** the place-name card; null = none showing. Two setStates per run. */
+  const [actCard, setActCard] = useState<{ act: ActId; t: number } | null>(null);
   /** head-mode edge-vignette pulse: 0 = off, else {t, color} */
   const [fxPulse, setFxPulse] = useState<{ t: number; color: string } | null>(null);
   const [reducedFx] = useState(
@@ -302,6 +308,10 @@ export default function RunnerLayer({
 
     setPhase(controlMode === 'keyboard' ? 'countdown' : 'calibrating');
     if (controlMode === 'keyboard') countdownEndRef.current = performance.now() + 3000;
+    // a restart must re-tell the story from Kaho — without this reset the
+    // act is still 3 from the last run and no card ever fires again
+    actRef.current = 0;
+    setActCard(null);
 
     let raf = 0;
     const loop = () => {
@@ -367,6 +377,11 @@ export default function RunnerLayer({
             engine.startPlaying();
             setPhase('playing');
             audioManager.playMusic();
+            // name the opening place too — without this Kaho would be the one
+            // act the player never sees titled
+            actRef.current = 1;
+            setActCard({ act: 1, t: now });
+            klog('ACT', { act: 1, progress: 0 });
           }
           break;
         }
@@ -437,6 +452,21 @@ export default function RunnerLayer({
         dawnTotal > 0 && dawnLeft !== null
           ? Math.min(1, Math.max(0, 1 - dawnLeft / dawnTotal))
           : Math.min(1, Math.max(0, sceneState.distance / DAWN_FALLBACK_M));
+
+      // Kaho → Lohit Paar → Dong. Derived from the SAME progress value the
+      // dawn ramp uses, so the place and the light can never disagree, and
+      // pushed to React ONLY on a change — two setStates in a whole run.
+      // (The scene derives its own act from `dawn` inside update(); nothing
+      // act-related is passed down, so there is one source of truth.)
+      if (phaseRef.current === 'playing') {
+        const act = actForProgress(dawn);
+        if (act !== actRef.current) {
+          actRef.current = act;
+          setActCard({ act, t: now });
+          klog('ACT', { act, progress: Math.round(dawn * 100) / 100 });
+        }
+      }
+
       scene.update(sceneState, now, dawn);
 
       // edge speed-vignette intensity — SMOOTHED velocity only (see ref
@@ -661,6 +691,16 @@ export default function RunnerLayer({
           <div className="absolute inset-y-0 right-0 w-[20vw] bg-gradient-to-l from-brass/45 to-transparent" />
           <div className="absolute inset-x-0 bottom-0 h-[18vh] bg-gradient-to-t from-brass-light/35 to-transparent" />
         </div>
+      )}
+      {/* act title card — non-blocking, lower third, clear of the lane. It
+          unmounts itself on animationend like every other overlay here. */}
+      {actCard && uiPhase === 'playing' && (
+        <ActTitleCard
+          key={`a${actCard.t}`}
+          act={actCard.act}
+          reduced={reducedFx}
+          onDone={() => setActCard(null)}
+        />
       )}
       {fxDust > 0 && (
         <div
