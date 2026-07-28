@@ -46,21 +46,25 @@ const PANELS: { label: string; sky: string; hud: HudState }[] = [
 
 export default function HudPreview() {
   return (
-    <main className="min-h-[100dvh] bg-neutral-900 p-4">
-      <h1 className="mb-3 font-heading text-lg font-bold text-brass-pale">
+    <main className="min-h-[100dvh] bg-neutral-900">
+      <h1 className="p-3 font-heading text-lg font-bold text-brass-pale">
         HUD preview — dev only
       </h1>
-      <div className="flex flex-wrap gap-4">
+      <div className="flex flex-col">
         {PANELS.map((p) => (
           <figure key={p.label} className="m-0">
             <div
               data-hud-panel={p.label}
-              className="relative h-[420px] w-[300px] overflow-hidden rounded-lg"
+              // FULL viewport width on purpose. The cluster's max-w-[38vw] wrap
+              // and the centred timer are both viewport-relative, so a panel
+              // narrower than the viewport would show a collision (or hide one)
+              // that no player ever sees. Run the capture at a phone viewport.
+              className="relative h-[430px] w-screen overflow-hidden"
               style={{ background: p.sky }}
             >
               <RunnerHUD hud={p.hud} />
             </div>
-            <figcaption className="mt-1 text-xs text-neutral-400">{p.label}</figcaption>
+            <figcaption className="p-2 text-xs text-neutral-400">{p.label}</figcaption>
           </figure>
         ))}
       </div>

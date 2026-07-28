@@ -199,6 +199,27 @@ export function isGoldRush(p: number, sessionMs: number): boolean {
   return p >= finaleWindows(sessionMs).rushStart;
 }
 
+/**
+ * Progress from which the SKY is bright enough that the HUD needs dark-on-light
+ * treatment: heavier chip backings, a scrim under the cue label, and unlit
+ * prayer flags lifted off the floor.
+ *
+ * Pinned to the DAWN ramp, not guessed — 0.72 leads the saffron stop at p 0.75
+ * by roughly one blend band, so the chrome has already firmed up by the time
+ * the sky turns. The isGoldRush term is belt-and-braces: the rush opens at
+ * p ≈ 0.78 (30s) to 0.83 (90s), i.e. AFTER the sky is already bright, so 0.72
+ * is the load-bearing half.
+ *
+ * Paint only. Nothing downstream of this reaches the engine or the scoring.
+ */
+export const BRIGHT_SKY_START = 0.72;
+
+export function isBrightSky(p: number, sessionMs: number | null): boolean {
+  if (!Number.isFinite(p)) return false;
+  if (p >= BRIGHT_SKY_START) return true;
+  return sessionMs !== null && isGoldRush(p, sessionMs);
+}
+
 // ── the prop plan ─────────────────────────────────────────────────────────
 
 /** The three recycled trailside rows, sized and indexed exactly as buildWorld

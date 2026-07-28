@@ -18,6 +18,8 @@ import {
   isGoldRush,
   isWalongBeat,
   ACT_PROP_LEAD,
+  BRIGHT_SKY_START,
+  isBrightSky,
   ACTS,
   DAWN,
   PROP_ROW_SIZES,
@@ -454,5 +456,42 @@ describe('dawn ramp aligns with the acts', () => {
     expect(tail.map((s) => s.sunI)).toEqual([0.8, 1.35, 1.75, 1.95]);
     expect(tail.map((s) => s.ambI)).toEqual([0.74, 0.95, 1.2, 1.35]);
     expect(tail.map((s) => s.sunY)).toEqual([4, 20, 31, 40]);
+  });
+});
+
+describe('bright sky (HUD contrast switch)', () => {
+  it('leads the saffron DAWN stop without firing in the pre-dawn violet', () => {
+    // 0.68 is the violet stop, 0.75 the saffron one — the switch must sit
+    // between them so the chrome firms up just BEFORE the sky turns
+    expect(BRIGHT_SKY_START).toBeGreaterThan(0.68);
+    expect(BRIGHT_SKY_START).toBeLessThan(0.75);
+    expect(isBrightSky(0.68, 90_000)).toBe(false);
+    expect(isBrightSky(0.75, 90_000)).toBe(true);
+  });
+
+  it('is true for the whole Gold Rush at every session length', () => {
+    for (const sessionSec of [30, 60, 90]) {
+      const sessionMs = sessionSec * 1000;
+      const { rushStart } = finaleWindows(sessionMs);
+      for (let p = rushStart; p <= 1; p += 0.01) {
+        expect(isBrightSky(p, sessionMs), `${sessionSec}s @ p=${p}`).toBe(true);
+      }
+    }
+  });
+
+  it('never flips back off once it turns on', () => {
+    let seenTrue = false;
+    for (let p = 0; p <= 1.0001; p += 0.005) {
+      const on = isBrightSky(p, 60_000);
+      if (on) seenTrue = true;
+      else expect(seenTrue, `flipped back off at p=${p}`).toBe(false);
+    }
+    expect(seenTrue).toBe(true);
+  });
+
+  it('still works with no timer, and rejects a non-finite progress', () => {
+    expect(isBrightSky(0.5, null)).toBe(false);
+    expect(isBrightSky(0.9, null)).toBe(true);
+    expect(isBrightSky(Number.NaN, 60_000)).toBe(false);
   });
 });

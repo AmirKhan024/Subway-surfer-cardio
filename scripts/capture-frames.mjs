@@ -19,6 +19,8 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 const LABEL = process.argv[2] ?? 'run';
+/** --hud skips the 90s run and captures only the HUD chrome panels */
+const HUD_ONLY = process.argv.includes('--hud');
 const OUT = path.resolve('.capture', LABEL);
 const PORT = 3311;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -87,23 +89,27 @@ async function main() {
     });
 
     // ---- the live run -------------------------------------------------
-    await page.goto(`${ORIGIN}/?debug=1&kbd=1&sec=${SESSION_SEC}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await page.waitForSelector('canvas', { timeout: 60_000 });
+    if (!HUD_ONLY) {
+      await page.goto(`${ORIGIN}/?debug=1&kbd=1&sec=${SESSION_SEC}`, {
+        waitUntil: 'domcontentloaded',
+      });
+      await page.waitForSelector('canvas', { timeout: 60_000 });
 
-    const t0 = Date.now();
-    for (const shot of SHOTS) {
-      const wait = shot.at * 1000 - (Date.now() - t0);
-      if (wait > 0) await sleep(wait);
-      await page.screenshot({ path: path.join(OUT, `${shot.name}.png`) });
-      process.stdout.write(`  ${shot.name}  (${shot.why})\n`);
+      const t0 = Date.now();
+      for (const shot of SHOTS) {
+        const wait = shot.at * 1000 - (Date.now() - t0);
+        if (wait > 0) await sleep(wait);
+        await page.screenshot({ path: path.join(OUT, `${shot.name}.png`) });
+        process.stdout.write(`  ${shot.name}  (${shot.why})\n`);
+      }
+      // let the last FRAME_STATS window close out
+      await sleep(6000);
     }
-    // let the last FRAME_STATS window close out
-    await sleep(6000);
 
     // ---- HUD chrome panels --------------------------------------------
-    const hud = await browser.newPage({ viewport: { width: 1600, height: 560 }, deviceScaleFactor: 2 });
+    // phone-width viewport: the cluster's 38vw wrap and the sm: breakpoint are
+    // viewport-driven, so a wide window would show a layout no player sees
+    const hud = await browser.newPage({ viewport: { width: 430, height: 900 }, deviceScaleFactor: 2 });
     await hud.goto(`${ORIGIN}/dev/hud`, { waitUntil: 'networkidle' });
     await hud.waitForTimeout(800);
     await hud.screenshot({ path: path.join(OUT, '06-hud-panels.png'), fullPage: true });

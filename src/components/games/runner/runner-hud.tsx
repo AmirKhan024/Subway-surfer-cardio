@@ -13,7 +13,7 @@ import type { CueState } from '@/modules/game/engines/runner-engine';
 import { getReadyCueImage } from '@/lib/media/cue-preloader';
 import { cueLabel } from '@/lib/media/mode-media';
 import { COLORS } from './runner-constants';
-import { actForProgress, actMeta, type ActId } from './runner-acts';
+import { actForProgress, actMeta, isBrightSky, type ActId } from './runner-acts';
 
 export interface HudState {
   distance: number;
@@ -55,20 +55,29 @@ function fmtTimer(ms: number): string {
  * top-highlight and a black bottom shade. Composed as an arbitrary shadow
  * rather than a new Tailwind token so the config stays untouched; the outer
  * drop is the old `glass-sm` value, kept.
+ *
+ * `bright` is the Act-3 gold-sky treatment: the chip goes near-opaque, the
+ * brass border firms up and a black hairline ring separates it from the sky.
+ * Built as a FUNCTION rather than two class strings concatenated, so a bright
+ * and a dark utility for the same property never land in one className and
+ * leave the winner up to stylesheet order.
  */
-const CHIP_SHELL =
-  'inline-flex items-center justify-center rounded-[10px] border border-brass/40 ' +
-  'bg-gradient-to-b from-teak-light/75 to-teak-deep/85 backdrop-blur-md ' +
-  'shadow-[inset_0_1px_0_rgba(242,223,166,0.20),inset_0_-1px_0_rgba(0,0,0,0.35),0_4px_16px_0_rgba(15,23,42,0.25)]';
+const chipShell = (bright?: boolean) =>
+  'inline-flex shrink-0 items-center justify-center rounded-[10px] border bg-gradient-to-b backdrop-blur-md ' +
+  (bright
+    ? 'border-brass/60 from-teak-light/90 to-teak-deep/95 ring-1 ring-black/35 ' +
+      'shadow-[inset_0_1px_0_rgba(242,223,166,0.28),inset_0_-1px_0_rgba(0,0,0,0.45),0_4px_16px_0_rgba(0,0,0,0.35)]'
+    : 'border-brass/40 from-teak-light/75 to-teak-deep/85 ' +
+      'shadow-[inset_0_1px_0_rgba(242,223,166,0.20),inset_0_-1px_0_rgba(0,0,0,0.35),0_4px_16px_0_rgba(15,23,42,0.25)]');
 
-/** the one chip height. Kept OUT of CHIP_SHELL so a consumer can override it
+/** the one chip height. Kept OUT of chipShell so a consumer can override it
  *  without two competing h-* utilities landing in the same class string. */
 const CHIP_H = 'h-6 sm:h-7';
 
-function Chip({ children }: { children: React.ReactNode }) {
+function Chip({ children, bright }: { children: React.ReactNode; bright?: boolean }) {
   return (
     <div
-      className={`${CHIP_SHELL} ${CHIP_H} px-2 text-xs font-semibold text-brass-pale sm:px-3 sm:text-sm`}
+      className={`${chipShell(bright)} ${CHIP_H} px-2 text-xs font-semibold text-brass-pale sm:px-3 sm:text-sm`}
     >
       {children}
     </div>
@@ -83,14 +92,19 @@ const LUNG_TA = ['#2b6cb0', '#f7f7f2', '#c53030', '#2f855a', '#e8b339'];
  * the run goes. Same value the old bar used; only opacity/saturate animate,
  * so this stays as cheap as the scaleX bar it replaces at 10Hz HUD updates.
  */
-function PrayerFlagBar({ progress }: { progress: number }) {
+function PrayerFlagBar({ progress, bright }: { progress: number; bright?: boolean }) {
   return (
     <div
       className="absolute inset-x-0 top-0"
       style={{ marginTop: 'env(safe-area-inset-top, 0px)' }}
     >
-      <div className="h-px w-full bg-brass/40" />
-      <div className="flex h-2 items-start gap-[5px] px-1.5">
+      <div className={`h-px w-full ${bright ? 'bg-black/45' : 'bg-brass/40'}`} />
+      {/* on the gold sky the unlit flags sit ON a bright field, so they lift off
+          the floor and get a dark strip behind the row. Static background —
+          still only opacity/filter animate. */}
+      <div
+        className={`flex h-2 items-start gap-[5px] px-1.5 ${bright ? 'bg-black/30' : ''}`}
+      >
         {Array.from({ length: 10 }, (_, i) => {
           const lit = progress * 10 > i;
           return (
@@ -100,7 +114,7 @@ function PrayerFlagBar({ progress }: { progress: number }) {
               style={{
                 background: LUNG_TA[i % 5],
                 clipPath: 'polygon(0 0, 100% 0, 50% 100%)',
-                opacity: lit ? 0.95 : 0.16,
+                opacity: lit ? 0.95 : bright ? 0.3 : 0.16,
                 filter: lit ? 'saturate(1)' : 'saturate(0.1)',
               }}
             />
@@ -117,7 +131,7 @@ function MilestoneStone({ metres }: { metres: number }) {
     // deliberately NOT a chip — it is a painted roadside stone, and the one
     // light-on-dark element in the cluster. Only its HEIGHT joins the system,
     // so the two columns line up however the cluster wraps.
-    <div className="flex h-6 flex-col overflow-hidden rounded-md border border-black/50 shadow-glass-sm sm:h-7">
+    <div className="flex h-6 shrink-0 flex-col overflow-hidden rounded-md border border-black/50 shadow-glass-sm sm:h-7">
       <div className="h-1.5 shrink-0 bg-gradient-to-b from-brass-light to-brass" />
       <div className="flex flex-1 items-center justify-center bg-gradient-to-b from-[#F0EDE4] to-[#DCD7CB] px-2 text-center">
         <span className="font-heading text-xs font-black tabular-nums text-teak sm:text-sm">
@@ -211,10 +225,12 @@ function StreakPips({
   streak,
   target,
   sealed,
+  bright,
 }: {
   streak: number;
   target: number;
   sealed: number;
+  bright?: boolean;
 }) {
   return (
     <div
@@ -222,10 +238,11 @@ function StreakPips({
       // its own surface rather than CHIP_SHELL: the studs need a DARK socket
       // plate behind them (a teak gradient would wash the unlit rims out), and
       // that means no gradient — same border and bevel language, flat backing.
-      className="inline-flex h-[18px] items-center justify-center gap-[3px] rounded-[10px]
-                 border border-brass/40 bg-black/45 px-2 backdrop-blur-md
-                 shadow-[inset_0_1px_2px_rgba(0,0,0,0.55),0_4px_16px_0_rgba(15,23,42,0.25)]
-                 motion-safe:animate-cue-pop"
+      className={`inline-flex h-[18px] shrink-0 items-center justify-center gap-[3px] rounded-[10px]
+                  border border-brass/40 px-2 backdrop-blur-md
+                  shadow-[inset_0_1px_2px_rgba(0,0,0,0.55),0_4px_16px_0_rgba(15,23,42,0.25)]
+                  motion-safe:animate-cue-pop
+                  ${bright ? 'bg-black/60 ring-1 ring-black/40' : 'bg-black/45'}`}
       title={`Clean streak — ${target} in a row seals a Kosha`}
       aria-label={`Clean streak ${streak} of ${target}`}
     >
@@ -354,12 +371,12 @@ export function FinaleCard({
 }
 
 /** Where you are, under the milestone stone. Brass and teak, one line. */
-function ActChip({ act }: { act: ActId }) {
+function ActChip({ act, bright }: { act: ActId; bright?: boolean }) {
   const m = actMeta(act);
   return (
     <div
       // a sub-line under the stone, so it is the one chip that runs shorter
-      className={`${CHIP_SHELL} h-[18px] px-1.5 text-center text-[9px] font-bold uppercase tracking-[0.16em]`}
+      className={`${chipShell(bright)} h-[18px] px-1.5 text-center text-[9px] font-bold uppercase tracking-[0.16em]`}
       style={{ color: m.accent }}
       title={m.beat}
     >
@@ -379,10 +396,13 @@ export function ActionCue({
   cue,
   lowImpact,
   headMode = false,
+  bright = false,
 }: {
   cue: CueState;
   lowImpact: boolean;
   headMode?: boolean;
+  /** Act-3 gold sky — the label needs a scrim, the colour must not change */
+  bright?: boolean;
 }) {
   const isJump = cue.type === 'hurdle';
   const color = isJump ? COLORS.jump : COLORS.squat;
@@ -417,10 +437,25 @@ export function ActionCue({
           </div>
         </div>
       )}
-      <div className="text-sm font-bold tracking-widest" style={{ color }}>
+      {/* saffron on the gold sky is nearly zero-contrast, so on the finale the
+          label gets a scrim behind it. The COLOUR never changes — it is how
+          the action is identified. */}
+      <div
+        className={`text-sm font-bold tracking-widest ${
+          bright ? 'rounded-md bg-teak-deep/85 px-2 py-0.5 ring-1 ring-black/35' : ''
+        }`}
+        style={{
+          color,
+          textShadow: bright ? '0 1px 2px rgba(0,0,0,0.8)' : undefined,
+        }}
+      >
         {label}
       </div>
-      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-teak-deep/80">
+      <div
+        className={`h-1.5 w-24 overflow-hidden rounded-full ${
+          bright ? 'bg-teak-deep/95 ring-1 ring-black/35' : 'bg-teak-deep/80'
+        }`}
+      >
         <div
           className="h-full rounded-full transition-[width] duration-75"
           style={{ width: `${Math.round(cue.progress * 100)}%`, background: color }}
@@ -440,17 +475,27 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
   // prayer flags and the dawn ramp read, so nothing new is plumbed through
   // HudState and there is one source of truth for the acts
   const act = progress === null ? null : actForProgress(progress);
+  // Act 3 turns the sky saffron→gold→near-white, and the chrome was tuned for
+  // a near-black one. Same single source of truth as the acts above: derived
+  // from `progress`, nothing new plumbed through HudState.
+  const bright = progress !== null && isBrightSky(progress, hud.sessionMs);
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
       {/* session progress — a line of prayer flags, one per 10% */}
-      {progress !== null && <PrayerFlagBar progress={progress} />}
+      {progress !== null && <PrayerFlagBar progress={progress} bright={bright} />}
       {/* session timer — active-movement time only (pauses/rests don't tick) */}
       {hud.timerMs !== null && (
         <div
-          className={`absolute left-1/2 -translate-x-1/2 rounded-xl border bg-teak-deep/75 px-4 py-1.5 font-heading text-lg font-bold tabular-nums backdrop-blur-md sm:text-xl ${
+          // the low-timer alarm branch is untouched on purpose: saffron + pulse
+          // IS the warning. It only gains the darker backing so it survives gold.
+          className={`absolute left-1/2 -translate-x-1/2 rounded-xl border px-4 py-1.5 font-heading text-lg font-bold tabular-nums backdrop-blur-md sm:text-xl ${
+            bright ? 'bg-teak-deep/90 ring-1 ring-black/35' : 'bg-teak-deep/75'
+          } ${
             timerLow
               ? 'border-saffron/60 text-saffron motion-safe:animate-pulse'
-              : 'border-brass/30 text-brass-pale'
+              : bright
+                ? 'border-brass/60 text-brass-pale'
+                : 'border-brass/30 text-brass-pale'
           }`}
           style={{ top: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
         >
@@ -460,16 +505,20 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
       {/* top-left chips — wrap into a narrow stack on phones so they never
           collide with the centered timer or the pause chip */}
       <div
-        className="absolute left-3 flex max-w-[38vw] flex-wrap items-start gap-1 sm:max-w-none sm:gap-1.5"
+        // horizontal gap deliberately left at the shipped 1.5/2: it is what
+        // decides WHERE the row wraps, and tightening it let a third chip
+        // reach across into the centred timer. The cluster is lightened by the
+        // unified heights and the tighter COLUMN gap instead.
+        className="absolute left-3 flex max-w-[38vw] flex-wrap items-start gap-1.5 sm:max-w-none sm:gap-2"
         style={{ top: 'calc(0.75rem + env(safe-area-inset-top, 0px))' }}
       >
         {/* the milestone stone and the place you are passing through, as a
             column — so naming the act costs no extra width in the cluster */}
         <div className="flex flex-col items-stretch gap-[3px]">
           <MilestoneStone metres={Math.floor(hud.distance)} />
-          {act !== null && <ActChip act={act} />}
+          {act !== null && <ActChip act={act} bright={bright} />}
         </div>
-        <Chip>
+        <Chip bright={bright}>
           <span
             className="flex items-center gap-1 text-brass-pale/60"
             title="Stumbles — the trail slows you, it never stops you"
@@ -480,7 +529,7 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
         </Chip>
         {/* full-strength brass: cleared is the positive tally, stumbles above
             stay muted on purpose */}
-        <Chip>
+        <Chip bright={bright}>
           <span className="flex items-center gap-1 text-brass-pale" title="Gates cleared">
             <ClearedIcon />
             {hud.cleared}
@@ -490,7 +539,7 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
             the pips always sit directly UNDER the reward they feed, however
             the cluster wraps on a narrow phone */}
         <div className="flex flex-col items-stretch gap-[3px]">
-          <Chip>
+          <Chip bright={bright}>
             <span className="flex items-center gap-1 text-brass-light">
               <KoshaIcon />
               {hud.coins}
@@ -503,6 +552,7 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
             streak={hud.cleanStreak}
             target={hud.streakTarget}
             sealed={hud.sealedKoshas}
+            bright={bright}
           />
         </div>
       </div>
@@ -514,7 +564,12 @@ export default function RunnerHUD({ hud }: { hud: HudState }) {
           key={hud.cue.obstacleId}
           className="absolute left-1/2 top-16 -translate-x-1/2 motion-safe:animate-cue-pop [will-change:transform]"
         >
-          <ActionCue cue={hud.cue} lowImpact={hud.lowImpact} headMode={hud.headMode} />
+          <ActionCue
+            cue={hud.cue}
+            lowImpact={hud.lowImpact}
+            headMode={hud.headMode}
+            bright={bright}
+          />
         </div>
       )}
 
