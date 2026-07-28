@@ -1106,7 +1106,7 @@ export function makeCoin(): THREE.Object3D {
   // costs no extra mesh and no extra draw call.
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(0.105, 0.026, 4, 16),
-    new THREE.MeshLambertMaterial({ color: 0xd9a441, emissive: 0x3a2b0d }),
+    new THREE.MeshBasicMaterial({ color: 0xb8842f }),
   );
   ring.rotation.z = Math.PI / 4; // flats front/back, not corner-on
   group.add(ring);
