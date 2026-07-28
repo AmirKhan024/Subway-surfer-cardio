@@ -112,6 +112,13 @@ export class RunnerScene {
   private actW: ActWeights = { w1: 1, w2: 0, w3: 0 };
   /** last ridge-broadening amount actually written (gates the scale writes) */
   private lastRidgeW3 = -1;
+  // ── finale ──
+  private cairn!: THREE.Object3D;
+  /** eased 0..1 finale intensity, so the gold arrives and leaves smoothly */
+  private goldT = 0;
+  private beatT = 0;
+  /** mist opacity as applyActLook left it, before the finale pushes on it */
+  private actMistOpacity = 0;
   /** scratch colours — reused every frame so applyDawn allocates nothing */
   private cA = new THREE.Color();
   private cB = new THREE.Color();
@@ -270,6 +277,15 @@ export class RunnerScene {
       this.addSlot('C', i, (i / PROP_ROW_SIZES.C) * LOOP_LEN + 3, side * (ROAD_W / 2 + 2.2), side);
     }
 
+    // the Walong memorial — built once, hidden until the beat. NOT a
+    // PropKind: the recycled rows only change identity on a lap wrap, which
+    // will not happen inside a 3s window, and adding a kind would break the
+    // act-invariant guarantees the prop plan's tests pin.
+    this.cairn = makeCairn();
+    this.cairn.position.set(ROAD_W / 2 + 2.6, 0, -40);
+    this.cairn.visible = false;
+    this.scene.add(this.cairn);
+
     // the ridge line — one SHARED material so the dawn ramp tints all ten
     // peaks with a single write per frame
     // fog:false is load-bearing — the ridge sits at z=-130, well beyond
@@ -388,6 +404,7 @@ export class RunnerScene {
 
     this.applyDawn(progress);
     this.applyActLook(progress);
+    this.applyFinale(state, nowMs);
 
     // visual-scroll follower (see field comment): pass legitimate per-frame
     // motion 1:1, smooth only the super-speed excess of a frame hitch
@@ -497,6 +514,64 @@ export class RunnerScene {
   }
 
   /**
+   * The finale — the Walong Beat's stillness and the Lohit Gold Rush's swell.
+   *
+   * Rides the DAWN peak rather than adding a stop to it: the rush opens at
+   * p ≈ 0.83–0.89, already the brightest part of the ramp, and editing DAWN
+   * would break the act-alignment tests. DAWN's own comment caps intensity
+   * deliberately ("an over-exposed cream frame throws away the payoff the
+   * whole ramp was built for"), so this pushes gently.
+   *
+   * REDUCED MOTION: nothing here is gated, because none of it is motion —
+   * it is colour and light. The engine's reducedMotion contract is that the
+   * cost, the sound and the reward always land and only movement is
+   * suppressed; the payoff follows the same rule. The layer gates the one
+   * thing that IS motion (the banner animation and the FOV push).
+   */
+  private applyFinale(state: RunnerSceneState, nowMs: number): void {
+    // ease toward the target so the gold arrives as a swell, not a switch
+    const goldTarget = state.finale === 'gold' ? 1 : 0;
+    const beatTarget = state.finale === 'beat' ? 1 : 0;
+    this.goldT += (goldTarget - this.goldT) * 0.04;
+    this.beatT += (beatTarget - this.beatT) * 0.06;
+
+    if (this.goldT > 0.002) {
+      const g = this.goldT;
+      // the valley turning to metal
+      this.sunLight.intensity *= 1 + 0.14 * g;
+      this.ambLight.intensity *= 1 + 0.09 * g;
+      this.sunDiscMat.color.lerp(this.cA.setHex(0xfff0c0), 0.5 * g);
+      this.cSky.lerp(this.cA.setHex(0xffd77a), 0.22 * g);
+      (this.scene.background as THREE.Color).copy(this.cSky);
+      (this.scene.fog as THREE.Fog).color.copy(this.cSky);
+      // the air clears for the finish
+      this.mistMat.opacity = this.actMistOpacity * (1 - 0.45 * g);
+      // the river runs gold with everything else
+      this.lohitMat.color.lerp(this.cA.setHex(0xd8b45a), 0.45 * g);
+      this.barMat.color.lerp(this.cA.setHex(0xe8cf9a), 0.4 * g);
+      this.roadMat.color.lerp(this.cA.setHex(0xe6cf9c), 0.35 * g);
+    }
+
+    if (this.beatT > 0.002) {
+      // Walong: the light flattens and the air goes still. Restraint is the
+      // point — this is a 1962 war memorial, not a power-up.
+      const b = this.beatT;
+      this.sunLight.intensity *= 1 - 0.25 * b;
+      this.mistMat.opacity = this.actMistOpacity * (1 + 0.9 * b);
+    }
+
+    // the memorial cairn, trailside, only during the beat
+    const showCairn = this.beatT > 0.01;
+    this.cairn.visible = showCairn;
+    if (showCairn) {
+      // drifts past at the world's pace rather than sitting pinned to the
+      // camera — you travel through the moment, you do not stop at it
+      const z = ((nowMs / 1000) % 12) * 8 - 60;
+      this.cairn.position.z = z;
+    }
+  }
+
+  /**
    * Kaho → Lohit Paar → Dong: the CONTINUOUS half of the three-act journey.
    *
    * The props can only change out of sight, which on a short run means the
@@ -544,6 +619,9 @@ export class RunnerScene {
     this.railMat.opacity = railOpacity;
     const railsOn = railOpacity > 0.01;
     for (const rail of this.rails) rail.visible = railsOn;
+
+    // stash for applyFinale, which pushes on top of the act look
+    this.actMistOpacity = this.mistMat.opacity;
 
     // Dong opens out: the ridge broadens and flattens into a plateau
     // silhouette. Gated — this is 10 matrix-dirtying writes, and it only
@@ -952,6 +1030,58 @@ function makeScree(i: number): THREE.Object3D {
   );
   tuft.position.set(-s * 0.8, s * 0.4, s * 0.3);
   group.add(tuft);
+  return group;
+}
+
+/**
+ * The Walong memorial — a stone cairn with a single darchor pole.
+ *
+ * Walong is a real 1962 battle site. NO arcade gloss: no glow, no gold, no
+ * sparkle, nothing that reads as a pickup. Unlit stone against whatever the
+ * sky is doing, and one weathered flag. It is deliberately the plainest
+ * object in the whole scene.
+ */
+function makeCairn(): THREE.Object3D {
+  const group = new THREE.Group();
+  const stone = new THREE.MeshLambertMaterial({ color: 0x6e6a61 });
+  // a stacked cairn, widest at the base
+  const tiers = [
+    { r: 0.62, h: 0.36, y: 0.18 },
+    { r: 0.46, h: 0.32, y: 0.5 },
+    { r: 0.32, h: 0.26, y: 0.79 },
+    { r: 0.19, h: 0.2, y: 1.02 },
+  ];
+  for (const t of tiers) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(t.r * 0.82, t.r, t.h, 7), stone);
+    m.position.y = t.y;
+    group.add(m);
+  }
+  // a plain slab at the foot — the inscription you cannot read at this speed
+  const slab = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 0.5, 0.12),
+    new THREE.MeshLambertMaterial({ color: 0x59554d }),
+  );
+  slab.position.set(0, 0.25, 0.5);
+  slab.rotation.x = -0.18;
+  group.add(slab);
+  // one darchor pole, no flag line — a single mark, not a celebration
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.045, 3.1, 5),
+    new THREE.MeshLambertMaterial({ color: 0x4a3a28 }),
+  );
+  pole.position.set(0.55, 1.55, -0.1);
+  group.add(pole);
+  const flag = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.5, 1.7),
+    new THREE.MeshBasicMaterial({
+      map: flagTexture(),
+      transparent: true,
+      side: THREE.DoubleSide,
+      opacity: 0.75,
+    }),
+  );
+  flag.position.set(0.82, 2.0, -0.1);
+  group.add(flag);
   return group;
 }
 

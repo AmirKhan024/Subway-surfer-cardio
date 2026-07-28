@@ -33,6 +33,7 @@ import { LM } from './types';
 import {
   generateChunk,
   coinsForChunk,
+  speedAtDistance,
   type Obstacle,
   type Coin,
 } from './runner-timeline';
@@ -50,7 +51,16 @@ import {
   JUICE,
   STUMBLE,
   KOSHA,
+  GOLD,
 } from '@/components/games/runner/runner-constants';
+// Finale phase schedule. Pure functions of (progress, sessionMs) — DOM-free
+// and three-free by that file's contract, so the engine's node-env tests are
+// unaffected. Nothing here reaches detection or scoring.
+import {
+  finaleWindows,
+  isGoldRush,
+  isWalongBeat,
+} from '@/components/games/runner/runner-acts';
 import type { RunnerRawData } from '@/types/raw-data';
 
 export type ControlMode = 'pose' | 'keyboard' | 'head';
@@ -113,6 +123,10 @@ export interface RunnerSceneState {
   streakTarget: number;
   /** Koshas sealed this run. ENGAGEMENT ONLY — never scored. */
   sealedKoshas: number;
+  /** finale phase — COSMETIC. The scene reads this to swell the gold and
+   *  show the memorial; nothing here feeds back into the engine, and
+   *  neither scoring ratio can see it. */
+  finale: 'none' | 'beat' | 'gold';
   /** true while the runner is tripping — collecting is disabled */
   stumbling: boolean;
   /** timestampMs of the last failed obstacle, 0 if none */
@@ -194,6 +208,21 @@ export class RunnerEngine implements GameEngine {
   private sealedKoshas = 0;
   /** next chunk index for the endless obstacle stream */
   private chunkIndex = 0;
+  // ── finale (Walong Beat + Lohit Gold Rush) ──
+  // ENGAGEMENT ONLY. The Beat DEFERS obstacles rather than dropping them and
+  // the Gold Rush leaves obstacle density untouched, so neither can move the
+  // clear fraction or the clean-form rate — the only two things scored.
+  /** true once the Beat's one-shot deferral has run */
+  private beatApplied = false;
+  /** true while the Beat is open (world eases, nothing to clear) */
+  private inBeat = false;
+  /** true once the Gold Rush has opened */
+  private rushStarted = false;
+  /** game-time ms of the next Gold Rush mohur drop / chest */
+  private nextRushDropMs = 0;
+  private nextRushKoshaMs = 0;
+  /** Koshas granted by the Gold Rush (a subset of sealedKoshas) */
+  private rushKoshas = 0;
 
   // ── calibration ──
   private calHoldStart = 0; // 0 = not holding
@@ -413,6 +442,12 @@ export class RunnerEngine implements GameEngine {
     this.cleanStreak = 0;
     this.bestStreak = 0;
     this.sealedKoshas = 0;
+    this.beatApplied = false;
+    this.inBeat = false;
+    this.rushStarted = false;
+    this.nextRushDropMs = 0;
+    this.nextRushKoshaMs = 0;
+    this.rushKoshas = 0;
     // game clock (sessionMs/locomotionGating are config — they survive reset)
     this.gameTimeMs = 0;
     this.manuallyPaused = false;
@@ -793,10 +828,20 @@ export class RunnerEngine implements GameEngine {
     this.speedFactor = Math.min(1, this.speedFactor + LOCO.ACCEL_PER_S * dt);
     this.gameTimeMs += dt * 1000;
 
+    // the finale (Walong Beat / Lohit Gold Rush) — runs BEFORE the world
+    // advance so a beat deferral lands before anything can cross a plane
+    this.updateFinale();
+
     // 2. world advance (endless: spawn the next chunk before we get there)
     this.appendChunksIfNeeded();
-    const speedT = clamp01(this.distance / COURSE.RAMP_DISTANCE_M);
-    this.speed = COURSE.SPEED_START + (COURSE.SPEED_END - COURSE.SPEED_START) * speedT;
+    // MUST come from the shared curve, not a local copy. The timeline bakes
+    // obstacle spacing in metres using speedAtDistance(); if the engine
+    // played back a DIFFERENT speed, every gap would silently stretch or
+    // compress and the pace ramp would become a difficulty change nobody
+    // asked for. This used to be an inlined duplicate of the same formula —
+    // one edit away from exactly that bug. (Test: obstacle arrival times are
+    // invariant to PACE.SPEED_END_MULT.)
+    this.speed = speedAtDistance(this.distance);
     const prevDistance = this.distance;
     // landing hitstop pauses WORLD DISTANCE only (obstacles/coins/cue derive
     // from it) — the game clock and camera feel keep running, so the land
@@ -1038,6 +1083,125 @@ export class RunnerEngine implements GameEngine {
   }
 
   /**
+   * The finale — the Walong Beat, then the Lohit Gold Rush.
+   *
+   * ASSESSMENT INTEGRITY IS THE WHOLE DESIGN HERE. The score reads exactly
+   * two ratios: the fraction of obstacles cleared, and the clean-form rate.
+   * So:
+   *  - the Beat DEFERS obstacles down the trail instead of deleting them.
+   *    Not one scored action is removed from the run — they arrive after the
+   *    memorial instead of during it — so neither the numerator nor the
+   *    denominator of the clear fraction changes, and the assessment-grade
+   *    obstacle floor (which a 30s run clears by only one) is untouched.
+   *    Nothing is there to clear or miss during the Beat, and no cue fires,
+   *    so no reps are prompted and the clean-form rate cannot drift either.
+   *  - the Gold Rush changes NOTHING about obstacles. Its entire escalation
+   *    is mohurs and Koshas, which the scoring formula provably never reads.
+   *
+   * Progress here is gameTimeMs / sessionMs — the identical value the layer
+   * derives from getTimerRemainingMs for the dawn ramp and the acts, so the
+   * light, the place and the finale can never disagree.
+   */
+  private updateFinale(): void {
+    if (this.sessionMs <= 0) return;
+    const p = this.gameTimeMs / this.sessionMs;
+
+    // ── the Walong Beat ──
+    const beatNow = isWalongBeat(p, this.sessionMs);
+    if (beatNow && !this.beatApplied) {
+      this.beatApplied = true;
+      this.inBeat = true;
+      const w = finaleWindows(this.sessionMs);
+      const beatSeconds = ((w.beatEnd - w.beatStart) * this.sessionMs) / 1000;
+      // how much trail the beat will cover, plus a margin so nothing lands
+      // right on the far edge of it
+      const span = this.speed * beatSeconds + GOLD.BEAT_MARGIN_M;
+      const from = this.distance;
+      // Shift EVERYTHING still ahead, not just what falls inside the window.
+      // Shifting only the window's contents would drop them on top of the
+      // obstacles just past it — two planes a metre apart, which is both
+      // unclearable and a difficulty spike. Moving the whole tail preserves
+      // every gap exactly: the run is delayed, never rearranged.
+      let moved = 0;
+      for (let i = 0; i < this.obstacles.length; i++) {
+        if (!this.resolved[i] && this.obstacles[i].atDistance >= from) {
+          this.obstacles[i].atDistance += span;
+          moved += 1;
+        }
+      }
+      // mohurs move with them — a memorial is not a place to be grabbing
+      for (let i = 0; i < this.coins.length; i++) {
+        if (!this.coinDone[i] && !this.coins[i].kosha && this.coins[i].atDistance >= from) {
+          this.coins[i].atDistance += span;
+        }
+      }
+      this.emit('WALONG_BEAT', { ms: Math.round(beatSeconds * 1000), deferred: moved });
+    } else if (!beatNow && this.inBeat) {
+      this.inBeat = false;
+      this.emit('WALONG_BEAT_END', {});
+    }
+
+    // ── the Lohit Gold Rush ──
+    if (!isGoldRush(p, this.sessionMs)) return;
+    if (!this.rushStarted) {
+      this.rushStarted = true;
+      this.nextRushDropMs = this.gameTimeMs;
+      this.nextRushKoshaMs = this.gameTimeMs + GOLD.KOSHA_EVERY_MS;
+      this.emit('GOLD_RUSH', { ms: Math.round((1 - p) * this.sessionMs) });
+    }
+    if (this.gameTimeMs >= this.nextRushDropMs) {
+      this.nextRushDropMs = this.gameTimeMs + GOLD.BURST_EVERY_MS;
+      this.dropRushMohurs();
+    }
+    if (this.gameTimeMs >= this.nextRushKoshaMs) {
+      this.nextRushKoshaMs = this.gameTimeMs + GOLD.KOSHA_EVERY_MS;
+      this.rushKoshas += 1;
+      this.spawnKosha('rush');
+    }
+  }
+
+  /**
+   * A line of mohurs on the trail ahead.
+   *
+   * GROUND-LEVEL ONLY — `aerial: false` is not a detail, it is the integrity
+   * of the whole feature. Reps are counted by the movement FSMs alone, with
+   * no obstacle involved: an aerial mohur needs jumpY() >= COIN.AERIAL_JUMPY,
+   * i.e. a real triggerJump(), which does `jumpReps += 1` and banks a
+   * clean/not-clean verdict. A frenzy of aerials would pour dozens of
+   * COIN-GRABBING jumps into the same cleanFormRate denominator as the
+   * OBSTACLE-CLEARING ones, dragging the Y band toward how tidily somebody
+   * hops for treasure. That would move a reported muscle age, invisibly.
+   * Never add `aerial: true` here.
+   *
+   * Kept CLEARANCE_M clear of every unresolved plane — the same rule
+   * coinsForChunk uses — so a mohur can never bribe a player into standing
+   * up through a beam. Pure array pushes with ids from this.coins.length
+   * (the spawnKosha pattern), so the seeded mohur stream is not perturbed.
+   */
+  private dropRushMohurs(): void {
+    const start = this.distance + GOLD.LEAD_M;
+    const dropped: number[] = [];
+    for (let n = 0; n < GOLD.LINE_LEN; n++) {
+      const at = start + n * COIN.LINE_SPACING_M;
+      let clear = true;
+      for (let i = 0; i < this.obstacles.length; i++) {
+        if (this.resolved[i]) continue;
+        if (Math.abs(this.obstacles[i].atDistance - at) < COIN.CLEARANCE_M) {
+          clear = false;
+          break;
+        }
+      }
+      if (!clear) continue;
+      // aerial: false — see the note above. This is load-bearing.
+      this.coins.push({ id: this.coins.length, atDistance: at, aerial: false });
+      this.coinDone.push(false);
+      this.coinCollected.push(false);
+      dropped.push(this.coins[this.coins.length - 1].id);
+    }
+    if (dropped.length > 0) this.emit('GOLD_MOHURS', { ids: dropped, aerial: false });
+  }
+
+  /**
    * Seal a Kosha: drop a brass chest in the path just ahead, centre and on
    * the ground, so the streak's reward is SEEN coming and then grabbed. It
    * rides the mohur pipeline (crossing, scene sync, windowing, disposal) with
@@ -1049,7 +1213,7 @@ export class RunnerEngine implements GameEngine {
    *
    * ENGAGEMENT ONLY. Nothing here reaches the scoring path.
    */
-  private spawnKosha(): void {
+  private spawnKosha(source: 'streak' | 'rush' = 'streak'): void {
     // id from the live array length, matching appendChunksIfNeeded's scheme:
     // the next chunk's startId is read at call time, so ids stay unique and
     // the seeded coin POSITIONS are untouched.
@@ -1066,6 +1230,10 @@ export class RunnerEngine implements GameEngine {
       id: coin.id,
       atDistance: coin.atDistance,
       streakTarget: KOSHA.STREAK_TARGET,
+      // 'streak' = earned by five clean actions; 'rush' = the Lohit Gold
+      // Rush paying out. Both are engagement, but only the first is a
+      // statement about how the player moved — the streak tests filter on it.
+      source,
     });
   }
 
@@ -2005,6 +2173,7 @@ export class RunnerEngine implements GameEngine {
       cleanStreak: this.cleanStreak,
       streakTarget: KOSHA.STREAK_TARGET,
       sealedKoshas: this.sealedKoshas,
+      finale: this.inBeat ? 'beat' : this.rushStarted ? 'gold' : 'none',
       lowImpact: this.lowImpact,
       crouch: this.crouch,
       jumpY: this.jumpY(),

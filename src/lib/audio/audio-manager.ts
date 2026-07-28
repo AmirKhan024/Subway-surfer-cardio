@@ -17,6 +17,7 @@
 export type SfxName =
   | 'coin'
   | 'kosha'
+  | 'dungchen'
   | 'jump'
   | 'squat'
   | 'stumble'
@@ -52,6 +53,9 @@ class AudioManager {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private musicGain: GainNode | null = null;
+  /** the music bed's resting level. A duck returns HERE, and the Gold Rush
+   *  swell moves it — so the two can never fight over a hardcoded value. */
+  private musicBase = 0.22;
   private padNodes: { osc: OscillatorNode; gain: GainNode }[] = [];
   private padTimer: ReturnType<typeof setInterval> | null = null;
   private padChordIdx = 0;
@@ -72,7 +76,8 @@ class AudioManager {
       this.master.gain.value = this.prefs.muted ? 0 : this.prefs.volume;
       this.master.connect(this.ctx.destination);
       this.musicGain = this.ctx.createGain();
-      this.musicGain.gain.value = 0.22; // music sits well under the SFX
+      this.musicBase = 0.22; // music sits well under the SFX
+      this.musicGain.gain.value = this.musicBase;
       this.musicGain.connect(this.master);
       this.initialized = true;
       if (this.ctx.state === 'suspended') void this.ctx.resume();
@@ -211,13 +216,35 @@ class AudioManager {
     this.padNodes = [];
   }
 
-  /** Briefly duck the music (e.g. under the gameover sting). */
-  duckMusic(seconds = 2): void {
+  /**
+   * Briefly duck the music (e.g. under the gameover sting, or down to near
+   * silence for the Walong Beat).
+   *
+   * Restores to musicBase, NOT to a literal: the Gold Rush swells the bed,
+   * and a hardcoded restore would snap it back down the next time anything
+   * ducked — silently killing the swell partway through the finale.
+   */
+  duckMusic(seconds = 2, to = 0.06): void {
     if (!this.ctx || !this.musicGain) return;
     try {
       const now = this.ctx.currentTime;
-      this.musicGain.gain.setTargetAtTime(0.06, now, 0.1);
-      this.musicGain.gain.setTargetAtTime(0.22, now + seconds, 0.5);
+      this.musicGain.gain.setTargetAtTime(to, now, 0.1);
+      this.musicGain.gain.setTargetAtTime(this.musicBase, now + seconds, 0.5);
+    } catch {
+      /* no-op */
+    }
+  }
+
+  /**
+   * Lift the music bed for the finale, and make that the new resting level
+   * so a later duck comes back UP to the swell rather than down to the
+   * opening volume.
+   */
+  swellMusic(to = 0.34, seconds = 2): void {
+    if (!this.ctx || !this.musicGain) return;
+    try {
+      this.musicBase = to;
+      this.musicGain.gain.setTargetAtTime(to, this.ctx.currentTime, seconds / 3);
     } catch {
       /* no-op */
     }
@@ -250,6 +277,22 @@ class AudioManager {
           this.blip(196.0, 0.17, 'triangle', 0.15, 0.115); // the casket's weight
           this.blip(130.81, 0.24, 'sine', 0.11, 0.135); // body, sub layer
           this.blip(1567.98, 0.34, 'sine', 0.055, 0.15); // brass ring-off
+          break;
+        case 'dungchen':
+          // The long horn at the dawn — the Gold Rush opening over the
+          // plateau. Pitched on D to match the pad's D drone (CHORDS[0][0] =
+          // 146.83), so the swell resolves INTO the existing bed instead of
+          // fighting it.
+          // NOTE: the swell does not come from a slow attack — blip()'s
+          // attack is a fixed 12ms ramp and sweep() has no delay param. It
+          // comes from the STAGGERED entries below (0.10 → 0.60s), which is
+          // also closer to how a real dungchen's overtones actually bloom.
+          this.sweep(58.27, 73.42, 1.6, 'sawtooth', 0.15); // the horn coming up
+          this.blip(73.42, 2.4, 'triangle', 0.125, 0.1); // D2, the bore
+          this.blip(110.0, 2.2, 'triangle', 0.095, 0.18); // A2, the fifth
+          this.blip(146.83, 2.0, 'sine', 0.07, 0.3); // D3, the octave
+          this.blip(220.0, 1.6, 'sine', 0.045, 0.45); // A3
+          this.blip(293.66, 1.2, 'sine', 0.03, 0.6); // D4, the rasp on top
           break;
         case 'jump':
           this.sweep(300, 700, 0.18, 'sine', 0.2);

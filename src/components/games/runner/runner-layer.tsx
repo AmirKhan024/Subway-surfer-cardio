@@ -18,7 +18,7 @@ import type { PoseLandmarks } from '@/modules/pose/types';
 import type { CalibrationStatus } from '@/modules/game/engines/types';
 import { Pause, Volume2, VolumeX } from 'lucide-react';
 import { RunnerScene } from './runner-scene';
-import RunnerHUD, { ActTitleCard, type HudState } from './runner-hud';
+import RunnerHUD, { ActTitleCard, FinaleCard, type HudState } from './runner-hud';
 import { actForProgress, type ActId } from './runner-acts';
 import { useCamera } from '@/lib/mediapipe/use-camera';
 import { usePoseDetector } from '@/lib/mediapipe/use-pose';
@@ -35,6 +35,8 @@ function sfxForEvent(e: EngineEvent): SfxName | null {
       // NOT gated by reduced motion: the reward and its sound always land,
       // only the screen wash is suppressed. Same rule as 'stumble'.
       return 'kosha';
+    case 'GOLD_RUSH':
+      return 'dungchen';
     case 'JUMP_TRIGGER':
       return 'jump';
     case 'SQUAT_START':
@@ -177,6 +179,10 @@ export default function RunnerLayer({
   const actRef = useRef<ActId | 0>(0);
   /** the place-name card; null = none showing. Two setStates per run. */
   const [actCard, setActCard] = useState<{ act: ActId; t: number } | null>(null);
+  /** the finale card — the memorial, then the gold. Two more setStates. */
+  const [finaleCard, setFinaleCard] = useState<{ kind: 'beat' | 'gold'; t: number } | null>(
+    null,
+  );
   /** head-mode edge-vignette pulse: 0 = off, else {t, color} */
   const [fxPulse, setFxPulse] = useState<{ t: number; color: string } | null>(null);
   const [reducedFx] = useState(
@@ -312,6 +318,7 @@ export default function RunnerLayer({
     // act is still 3 from the last run and no card ever fires again
     actRef.current = 0;
     setActCard(null);
+    setFinaleCard(null);
 
     let raf = 0;
     const loop = () => {
@@ -403,6 +410,18 @@ export default function RunnerLayer({
         const sound = sfxForEvent(e);
         if (sound) audioManager.sfx(sound);
         if (e.tag === 'RUN_DONE') audioManager.duckMusic(2);
+        // the finale's audio. Both are SOUND, never gated by reduced motion.
+        if (e.tag === 'WALONG_BEAT') {
+          // near-silence for the memorial, scaled to the beat's own length.
+          // 0.012 rather than 0 — setTargetAtTime is exponential, and a true
+          // zero target invites denormals; -25dB under the bed is inaudible.
+          audioManager.duckMusic((e.data.ms as number) / 1000, 0.012);
+          setFinaleCard({ kind: 'beat', t: now });
+        }
+        if (e.tag === 'GOLD_RUSH') {
+          audioManager.swellMusic(0.34, 1.5);
+          setFinaleCard({ kind: 'gold', t: now });
+        }
         // beam whoosh is SOUND, not motion — all modes, even reduced-motion
         const beamCleared =
           e.tag === 'OBSTACLE' && e.data.type === 'beam' && e.data.cleared === true;
@@ -700,6 +719,16 @@ export default function RunnerLayer({
           act={actCard.act}
           reduced={reducedFx}
           onDone={() => setActCard(null)}
+        />
+      )}
+      {/* the finale beats — same non-blocking lower-third shell as the act
+          cards, so they can never cover the lane or pause the run */}
+      {finaleCard && uiPhase === 'playing' && (
+        <FinaleCard
+          key={`f${finaleCard.t}`}
+          kind={finaleCard.kind}
+          reduced={reducedFx}
+          onDone={() => setFinaleCard(null)}
         />
       )}
       {fxDust > 0 && (

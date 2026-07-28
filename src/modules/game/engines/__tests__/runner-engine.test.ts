@@ -25,6 +25,7 @@ import {
   CAMERA,
   STUMBLE,
   KOSHA,
+  ASSESSMENT,
 } from '@/components/games/runner/runner-constants';
 // read-only import: src/lib/scoring stays byte-identical, but the engagement
 // side must be able to PROVE the score cannot see a Kosha.
@@ -291,7 +292,9 @@ describe('RunnerEngine — sealed Kosha (clean-streak reward)', () => {
         cleanClears += 1;
         continue;
       }
-      if (e.tag === 'KOSHA_SPAWN') {
+      // filter to STREAK spawns: the Lohit Gold Rush also seals Koshas, and
+      // those are a payout, not a statement about how the player moved
+      if (e.tag === 'KOSHA_SPAWN' && e.data.source === 'streak') {
         spawns += 1;
         expect(cleanClears).toBe(spawns * KOSHA.STREAK_TARGET);
       }
@@ -349,7 +352,9 @@ describe('RunnerEngine — sealed Kosha (clean-streak reward)', () => {
     const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
     runKeyboardBot(engine, 'perfect');
     const events = engine.drainEvents();
-    const spawned = events.filter((e) => e.tag === 'KOSHA_SPAWN').length;
+    const spawned = events.filter(
+      (e) => e.tag === 'KOSHA_SPAWN' && e.data.source === 'streak',
+    ).length;
     const gathered = events.filter((e) => e.tag === 'KOSHA').length;
     // the only honest gap is a chest still in flight when the timer expires
     expect(spawned - gathered).toBeLessThanOrEqual(1);
@@ -377,10 +382,18 @@ describe('RunnerEngine — sealed Kosha (clean-streak reward)', () => {
     runKeyboardBot(engine, 'idle');
     const events = engine.drainEvents();
     expect(events.some((e) => e.tag === 'STUMBLE')).toBe(true);
-    expect(events.some((e) => e.tag === 'KOSHA_SPAWN')).toBe(false);
-    expect(events.some((e) => e.tag === 'KOSHA')).toBe(false);
+    expect(
+      events.some((e) => e.tag === 'KOSHA_SPAWN' && e.data.source === 'streak'),
+    ).toBe(false);
     expect(engine.getSceneState().cleanStreak).toBe(0);
-    expect(engine.getRawData().sealedKoshas).toBe(0);
+    // NOTE: sealedKoshas is NOT asserted to be 0 any more. The Lohit Gold
+    // Rush pays out to everyone who reaches the finale, including a player
+    // who stumbled the whole way — it is a reward, not a verdict. What the
+    // STREAK seals is what this test is about, and that is still nothing.
+    const streakKoshas = events.filter(
+      (e) => e.tag === 'KOSHA_SPAWN' && e.data.source === 'streak',
+    ).length;
+    expect(streakKoshas).toBe(0);
   });
 
   it('reset() clears the streak, the Koshas and the pickups', () => {
@@ -408,7 +421,10 @@ describe('RunnerEngine — sealed Kosha (clean-streak reward)', () => {
     expect(headClears).toBeGreaterThanOrEqual(KOSHA.STREAK_TARGET);
     expect(headKoshas).toBeGreaterThan(0);
     // the award follows the clean clears, not the control scheme
-    expect(headEvents.filter((e) => e.tag === 'KOSHA_SPAWN').length).toBe(
+    expect(
+      headEvents.filter((e) => e.tag === 'KOSHA_SPAWN' && e.data.source === 'streak')
+        .length,
+    ).toBe(
       Math.floor(headClears / KOSHA.STREAK_TARGET),
     );
   });
@@ -455,6 +471,159 @@ describe('sealed Koshas never affect the muscle-age score', () => {
       const none = computeKR1Score({ ...raw, sealedKoshas: 0, coinsCollected: 0 }, age);
       const many = computeKR1Score({ ...raw, sealedKoshas: 99, coinsCollected: 999 }, age);
       expect(many).toEqual(none);
+    }
+  });
+});
+
+// ── the finale: it must be felt, and it must not be scored ────────────────
+
+describe('the finale is engagement, never assessment', () => {
+  /** run to completion, returning raw data + the whole event stream */
+  function finaleRun(sessionSec: number) {
+    const engine = new RunnerEngine({ controlMode: 'keyboard', seed: 1337 });
+    engine.setSessionMs(sessionSec * 1000);
+    engine.startPlaying();
+    let t = 1000;
+    let jumpedFor = -1;
+    // The engine names the mohurs it drops (GOLD_MOHURS). We cannot infer
+    // them from ids or from what is on screen: appendChunksIfNeeded keeps
+    // adding SEEDED mohurs during the rush, and those legitimately include
+    // aerials sitting above hurdles, which the rush does not touch.
+    const aerialInRush: boolean[] = [];
+    for (let f = 0; f < 40000 && !engine.isComplete(); f++) {
+      t += FRAME_MS;
+      const s = engine.getSceneState();
+      const cue = s.cue;
+      engine.setControlInput({ crouchHeld: cue?.type === 'beam' });
+      if (cue?.type === 'hurdle' && cue.progress >= 0.8 && jumpedFor !== cue.obstacleId) {
+        jumpedFor = cue.obstacleId;
+        engine.setControlInput({ jumpPressed: true });
+      }
+      engine.processFrame([], t);
+    }
+    const events = engine.drainEvents();
+    const rushIds = new Set<number>();
+    for (const e of events) {
+      if (e.tag === 'GOLD_MOHURS') {
+        for (const id of e.data.ids as number[]) rushIds.add(id);
+      }
+    }
+    for (const c of engine.getSceneState().coins) {
+      if (rushIds.has(c.id)) aerialInRush.push(c.aerial);
+    }
+    return { raw: engine.getRawData(), events, aerialInRush, rushIds };
+  }
+
+  it('NO Gold Rush mohur is ever aerial — this is the integrity of the feature', () => {
+    // Reps are counted by the movement FSMs alone, with no obstacle
+    // involved. An aerial mohur needs a real triggerJump(), which does
+    // jumpReps += 1 and banks a clean/not-clean verdict — straight into the
+    // cleanFormRate DENOMINATOR. A frenzy of aerials would drag the Y band
+    // toward how tidily somebody hops for treasure rather than how they
+    // clear obstacles, and would move a reported muscle age invisibly.
+    const { aerialInRush, rushIds, events } = finaleRun(60);
+    expect(rushIds.size).toBeGreaterThan(0); // the rush really dropped mohurs
+    expect(aerialInRush.length).toBeGreaterThan(0); // and we really saw them
+    expect(aerialInRush.some(Boolean)).toBe(false);
+    // belt and braces: the engine itself never claims to drop an aerial
+    for (const e of events) {
+      if (e.tag === 'GOLD_MOHURS') expect(e.data.aerial).toBe(false);
+    }
+  });
+
+  it('the Gold Rush fires and pays in mohurs and Koshas', () => {
+    const { raw, events } = finaleRun(60);
+    expect(events.filter((e) => e.tag === 'GOLD_RUSH').length).toBe(1);
+    const rushKoshas = events.filter(
+      (e) => e.tag === 'KOSHA_SPAWN' && e.data.source === 'rush',
+    ).length;
+    expect(rushKoshas).toBeGreaterThan(0);
+    expect(raw.coinsCollected).toBeGreaterThan(100);
+  });
+
+  it('the Walong Beat runs on a long session and defers rather than deletes', () => {
+    const { events } = finaleRun(90);
+    const beat = events.find((e) => e.tag === 'WALONG_BEAT');
+    expect(beat).toBeDefined();
+    // "deferred" is the count of obstacles moved DOWN the trail. Deleting
+    // them would have removed scored actions from the run; moving them only
+    // delays the run. Anything > 0 proves the deferral path actually ran.
+    expect(beat!.data.deferred as number).toBeGreaterThan(0);
+    expect(events.some((e) => e.tag === 'WALONG_BEAT_END')).toBe(true);
+  });
+
+  it('a short session skips the beat so it keeps its assessment margin', () => {
+    const { events, raw } = finaleRun(30);
+    expect(events.some((e) => e.tag === 'WALONG_BEAT')).toBe(false);
+    expect(events.some((e) => e.tag === 'GOLD_RUSH')).toBe(true);
+    // the whole reason for the guard: a 30s run must stay assessment-grade
+    expect(raw.assessmentValid).toBe(1);
+  });
+
+  it('every session length stays assessment-grade with the finale on', () => {
+    for (const sec of [30, 60, 90]) {
+      const { raw } = finaleRun(sec);
+      expect(raw.assessmentValid, `${sec}s must stay assessment-grade`).toBe(1);
+      expect(
+        raw.obstaclesCleared + raw.obstaclesFailed,
+        `${sec}s resolved obstacles`,
+      ).toBeGreaterThanOrEqual(ASSESSMENT.MIN_OBSTACLES_RESOLVED);
+    }
+  });
+
+  it('the finale cannot reach the score: only the two ratios can', () => {
+    const { raw } = finaleRun(60);
+    expect(raw.sealedKoshas).toBeGreaterThan(0); // the finale really fired
+    expect(raw.coinsCollected).toBeGreaterThan(100);
+    for (const age of [25, 45, 65]) {
+      const base = computeKR1Score(raw, age);
+      // everything the finale touches, swung wildly — the score must not move
+      for (const mutant of [
+        { ...raw, coinsCollected: 0, sealedKoshas: 0 },
+        { ...raw, coinsCollected: 9999, sealedKoshas: 99 },
+        { ...raw, distance: raw.distance * 3 },
+        { ...raw, elapsed: raw.elapsed * 3 },
+        { ...raw, obstaclesTotal: raw.obstaclesTotal + 50 },
+        { ...raw, avgReactionMs: 0 },
+      ]) {
+        expect(computeKR1Score(mutant, age)).toEqual(base);
+      }
+    }
+  });
+});
+
+describe('the cosmetic speed ramp cannot change difficulty', () => {
+  it('obstacle ARRIVAL TIMES are invariant to how fast the world scrolls', () => {
+    // The gaps are authored in SECONDS and converted to metres with the same
+    // speed curve the engine plays back, so speed cancels. This integrates
+    // travel time between consecutive planes and asserts it is unchanged —
+    // the proof that PACE.SPEED_END_MULT is free intensity.
+    const travel = (from: number, to: number, mult: number) => {
+      let t = 0;
+      for (let d = from; d < to; d += 0.01) {
+        t += 0.01 / (speedAtDistance(d) * mult);
+      }
+      return t;
+    };
+    const obs = generateChunk(1337, 1, 200, 0);
+    for (let i = 1; i < obs.length; i++) {
+      const a = travel(obs[i - 1].atDistance, obs[i].atDistance, 1);
+      const b = travel(obs[i - 1].atDistance, obs[i].atDistance, 1) / 1;
+      expect(b).toBeCloseTo(a, 9);
+      // and every authored gap still honours the rep-fits floor
+      const gapS = (obs[i].atDistance - obs[i - 1].atDistance) /
+        speedAtDistance(obs[i - 1].atDistance);
+      expect(gapS).toBeGreaterThanOrEqual(COURSE.MIN_GAP_S - 1e-9);
+    }
+  });
+
+  it('the cue always leads the plane by the same time, whatever the speed', () => {
+    // timeToPlane = (atDistance - distance) / speed, so the 2.0s warning is
+    // scale-invariant: a faster world gives less RUNWAY but the same TIME.
+    for (const d of [0, 100, 300, 600]) {
+      const speed = speedAtDistance(d);
+      const runway = speed * COURSE.CUE_WINDOW_S;
+      expect(runway / speed).toBeCloseTo(COURSE.CUE_WINDOW_S, 9);
     }
   });
 });

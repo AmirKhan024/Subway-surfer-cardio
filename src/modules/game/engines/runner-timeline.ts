@@ -9,7 +9,7 @@
  * so metrics stay comparable across seeds. The seed is recorded in
  * RunnerRawData for the audit trail.
  */
-import { COURSE, COIN } from '@/components/games/runner/runner-constants';
+import { COURSE, COIN, PACE } from '@/components/games/runner/runner-constants';
 
 export type ObstacleType = 'hurdle' | 'beam';
 
@@ -45,8 +45,32 @@ export function mulberry32(seed: number): () => number {
 
 /** Speed at a world distance (linear ramp over a FIXED distance — endless-safe). */
 export function speedAtDistance(d: number): number {
-  const t = Math.max(0, Math.min(1, d / COURSE.RAMP_DISTANCE_M));
-  return COURSE.SPEED_START + (COURSE.SPEED_END - COURSE.SPEED_START) * t;
+  return (
+    COURSE.SPEED_START +
+    (COURSE.SPEED_END * PACE.SPEED_END_MULT - COURSE.SPEED_START) * paceT(d)
+  );
+}
+
+/** Normalised position along the pace ramp, 0 at the start, 1 from
+ *  RAMP_DISTANCE_M on. Shared by both pace knobs so they ramp together. */
+export function paceT(d: number): number {
+  return Math.max(0, Math.min(1, d / COURSE.RAMP_DISTANCE_M));
+}
+
+/**
+ * How much of the RANDOM EXTRA gap survives at a distance — the REAL
+ * difficulty knob. MIN_GAP_S is never touched, so the "a full human rep
+ * always fits between obstacles" contract above holds byte-identically at
+ * every point of the ramp; only the slack on top of it closes.
+ *
+ * Distance-based rather than act-based on purpose: chunk 0 holds ~62s of
+ * obstacles and is generated inside reset(), which runs before the layer ever
+ * calls setSessionMs — so generation cannot know how long the run will be.
+ * Distance is monotonic in time, so a distance ramp still delivers "it gets
+ * tighter as you go" without needing the session length.
+ */
+export function extraGapMultAtDistance(d: number): number {
+  return 1 + (PACE.EXTRA_GAP_MULT_END - 1) * paceT(d);
 }
 
 /** Per-chunk RNG stream: deterministic for (seed, chunkIndex), independent
@@ -109,7 +133,13 @@ export function generateChunk(
     if (i > 0 || chunkIndex > 0) {
       // chunk 0 places its first obstacle exactly at the lead-in distance;
       // later chunks (and every subsequent obstacle) space by a paced gap
-      const gapSeconds = COURSE.MIN_GAP_S + rng() * COURSE.EXTRA_GAP_S;
+      // The gap is authored in SECONDS and converted to metres with the same
+      // speed curve the engine plays back — that is what makes the cadence
+      // (and the cue window, which divides by the same speed) invariant to
+      // how fast the world scrolls. gapMultAtDistance is the one term here
+      // that genuinely tightens the cadence; see PACE in runner-constants.
+      const gapSeconds =
+        COURSE.MIN_GAP_S + rng() * COURSE.EXTRA_GAP_S * extraGapMultAtDistance(d);
       d += speedAtDistance(d) * gapSeconds;
     }
     obstacles.push({ id: startId + i, type: types[i], atDistance: d });

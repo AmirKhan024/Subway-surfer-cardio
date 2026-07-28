@@ -236,6 +236,53 @@ export function ActTitleCard({
   );
 }
 
+/**
+ * The two finale beats: the Walong memorial, then the Lohit Gold Rush.
+ *
+ * Same shell as ActTitleCard — non-blocking, lower third, clear of the lane,
+ * unmounts on animationend — because the constraint is identical: the run
+ * must not pause and the obstacle must not be covered. Nothing is delayed or
+ * moved to make room for either card.
+ *
+ * The Walong copy is deliberately plain. It is a real 1962 battle site; the
+ * card names it and gets out of the way.
+ */
+export function FinaleCard({
+  kind,
+  reduced,
+  onDone,
+}: {
+  kind: 'beat' | 'gold';
+  reduced: boolean;
+  onDone: () => void;
+}) {
+  const beat = kind === 'beat';
+  const accent = beat ? '#A9C9D4' : '#E8C46A';
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      onAnimationEnd={onDone}
+      className={`pointer-events-none absolute left-1/2 z-30 w-max max-w-[62vw] rounded-xl
+                  border bg-teak-deep/75 px-4 py-2 text-center backdrop-blur-md
+                  shadow-glass-sm sm:max-w-sm [will-change:opacity,transform]
+                  ${beat ? 'border-frost/25' : 'border-brass/40'}
+                  ${reduced ? 'animate-act-card-flat' : 'animate-act-card'}`}
+      style={{ bottom: 'calc(2.75rem + env(safe-area-inset-bottom, 0px))' }}
+    >
+      <div className="text-[10px] font-bold tracking-[0.28em]" style={{ color: accent }}>
+        {beat ? 'WALONG' : 'LOHIT GOLD'}
+      </div>
+      <div className="font-heading text-lg font-bold text-brass-pale">
+        {beat ? 'The memorial' : 'The valley turns'}
+      </div>
+      <div className="text-[11px] text-brass-pale/70">
+        {beat ? 'Breathe. They held this ground.' : 'Take everything. The light is yours.'}
+      </div>
+    </div>
+  );
+}
+
 /** Where you are, under the milestone stone. Brass and teak, one line. */
 function ActChip({ act }: { act: ActId }) {
   const m = actMeta(act);

@@ -244,6 +244,53 @@ export const COURSE = {
   SEED_POOL: [1337, 2861, 4242, 7351, 9090],
 } as const;
 
+// ── Pace ramp (the finale build) ─────────────────────────────────────────
+//
+// READ THIS BEFORE CHANGING EITHER NUMBER. They look alike and are not.
+//
+// The run is also an ASSESSMENT. The scoring formula reads exactly two
+// ratios — the fraction of obstacles cleared, and the clean-form rate — so
+// nothing here can move a muscle-age by changing the formula. It can only
+// move one by making a real person clear less. That is the entire reason
+// these two knobs are separated and labelled.
+export const PACE = {
+  /**
+   * COSMETIC. Cannot change difficulty, and cannot move the score.
+   *
+   * Obstacle spacing is authored in SECONDS and converted to metres with
+   * speedAtDistance() at generation time; the engine plays back that SAME
+   * function; and the cue fires on time-to-plane (distance / speed). Speed
+   * therefore cancels out of both the cadence and the reaction window — a
+   * faster world arrives at the same obstacles at the same moments with the
+   * same 2s of warning. This makes the finale RUSH without making it harder.
+   *
+   * Load-bearing precondition: the engine must call speedAtDistance() rather
+   * than re-deriving the ramp. It used to inline a copy; if that ever comes
+   * back and the two drift apart, this stops being cosmetic and silently
+   * becomes a difficulty spike. There is a test pinning arrival times.
+   */
+  SPEED_END_MULT: 1.17, // 9 → 10.53 m/s at the finish
+
+  /**
+   * THE ONLY KNOB IN THIS FILE THAT CAN MOVE A REPORTED MUSCLE AGE.
+   *
+   * Squeezes the RANDOM EXTRA gap only — never MIN_GAP_S. That floor is a
+   * movement guarantee, not a style choice: generateChunk's contract is
+   * "every gap >= MIN_GAP_S at the local speed so a full human rep always
+   * fits between obstacles", and the engine tests pin it. Tightening below
+   * it would mean the rep genuinely does not fit, which is both an
+   * ergonomics problem and the most direct way to make people miss.
+   *
+   * 0.55 takes gaps from 2.6–3.6s to 2.6–3.15s by the finish: the mean
+   * closes ~7% and the run feels like it is gathering, while the tightest
+   * possible gap is byte-identical to what shipped.
+   *
+   * If the before/after musculage check ever moves, THIS is what to pull
+   * back toward 1.0. Engagement is not worth distorting a health number.
+   */
+  EXTRA_GAP_MULT_END: 0.55,
+} as const;
+
 // ── Stumble (the consequence of a miss — NOT detection) ──────────────────
 /**
  * Missing an obstacle makes the runner stumble; it never ends the run.
@@ -342,6 +389,24 @@ export const KOSHA = {
   Y: 0.9,
   /** visual spin, radians/second — slower than a mohur; it has weight */
   SPIN_RAD_S: 1.2,
+} as const;
+
+// ── The finale: Walong Beat + Lohit Gold Rush ────────────────────────────
+// ENGAGEMENT ONLY, like COIN and KOSHA. Nothing in this block changes a
+// scored action: the Beat DEFERS obstacles down the trail (it never deletes
+// one), and the Gold Rush leaves obstacle density completely alone.
+export const GOLD = {
+  /** how far ahead a Gold Rush mohur line drops, m */
+  LEAD_M: 12,
+  /** mohurs per drop */
+  LINE_LEN: 4,
+  /** game-time ms between mohur drops */
+  BURST_EVERY_MS: 700,
+  /** game-time ms between sealed Koshas during the rush */
+  KOSHA_EVERY_MS: 2200,
+  /** extra metres of clear trail either side of the memorial, so nothing
+   *  arrives right on the edge of the held breath */
+  BEAT_MARGIN_M: 6,
 } as const;
 
 // ── Camera feel ──────────────────────────────────────────────────────────

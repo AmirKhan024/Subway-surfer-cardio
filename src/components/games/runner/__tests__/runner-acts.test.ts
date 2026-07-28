@@ -9,9 +9,14 @@
  * going dark where the obstacles must stay readable).
  */
 import { describe, it, expect } from 'vitest';
+import { PACE } from '../runner-constants';
 import {
   ACT_BOUNDS,
   ACT_BLEND_BAND,
+  FINALE,
+  finaleWindows,
+  isGoldRush,
+  isWalongBeat,
   ACT_PROP_LEAD,
   ACTS,
   DAWN,
@@ -309,6 +314,94 @@ describe('act blend weights — the look cross-fades, it never cuts', () => {
       expect(Number.isFinite(out.w1 + out.w2 + out.w3)).toBe(true);
       expect(out.w1 + out.w2 + out.w3).toBeCloseTo(1, 9);
     }
+  });
+});
+
+describe('the finale windows scale with the session', () => {
+  const S = [30_000, 60_000, 90_000];
+
+  it('both phases sit wholly inside act 3', () => {
+    for (const ms of S) {
+      const w = finaleWindows(ms);
+      expect(w.rushStart, `${ms}ms rush`).toBeGreaterThan(ACT_BOUNDS.ACT3_START);
+      if (w.beatEnd > w.beatStart) {
+        expect(w.beatStart, `${ms}ms beat`).toBeGreaterThan(ACT_BOUNDS.ACT3_START);
+      }
+    }
+  });
+
+  it('never lets the finale swallow the run', () => {
+    for (const ms of S) {
+      const w = finaleWindows(ms);
+      const rushMs = (1 - w.rushStart) * ms;
+      // a fixed 15s rush would be HALF of a 30s run; the fraction+cap is
+      // what keeps a short session a run rather than a cutscene
+      expect(rushMs).toBeLessThanOrEqual(FINALE.GOLD_RUSH_MAX_MS + 1);
+      expect(rushMs / ms).toBeLessThanOrEqual(FINALE.GOLD_RUSH_FRACTION + 1e-9);
+    }
+  });
+
+  it('the beat ends exactly where the rush opens — they can never overlap', () => {
+    for (const ms of S) {
+      const w = finaleWindows(ms);
+      expect(w.beatEnd).toBe(w.rushStart);
+      expect(w.beatStart).toBeLessThanOrEqual(w.beatEnd);
+      for (let i = 0; i <= 1000; i++) {
+        const p = i / 1000;
+        expect(isWalongBeat(p, ms) && isGoldRush(p, ms)).toBe(false);
+      }
+    }
+  });
+
+  it('skips the beat on short sessions, where there is no obstacle to spare', () => {
+    // MEASURED: a 30s run resolves 9 obstacles against a floor of 8, so the
+    // beat's ~1-obstacle cost is the entire margin. This is the guard.
+    expect(isWalongBeat(0.95, 30_000)).toBe(false);
+    const w30 = finaleWindows(30_000);
+    expect(w30.beatStart).toBe(w30.beatEnd);
+    // ...but the Gold Rush, which costs nothing, still runs
+    expect(isGoldRush(0.95, 30_000)).toBe(true);
+    // and longer sessions do get the memorial
+    expect(finaleWindows(60_000).beatEnd).toBeGreaterThan(finaleWindows(60_000).beatStart);
+    expect(finaleWindows(90_000).beatEnd).toBeGreaterThan(finaleWindows(90_000).beatStart);
+  });
+
+  it('a run with no timer has no finale at all', () => {
+    for (const bad of [0, -1, NaN, Infinity]) {
+      const w = finaleWindows(bad);
+      expect(w.rushStart).toBe(1);
+      expect(isGoldRush(0.99, bad)).toBe(false);
+      expect(isWalongBeat(0.99, bad)).toBe(false);
+    }
+    expect(isGoldRush(NaN, 60_000)).toBe(false);
+    expect(isWalongBeat(NaN, 60_000)).toBe(false);
+  });
+
+  it('the rush runs to the very end once it opens', () => {
+    for (const ms of S) {
+      const w = finaleWindows(ms);
+      expect(isGoldRush(w.rushStart, ms)).toBe(true);
+      expect(isGoldRush(1, ms)).toBe(true);
+      expect(isGoldRush(w.rushStart - 1e-6, ms)).toBe(false);
+    }
+  });
+});
+
+describe('the pace ramp keeps its two knobs honestly separated', () => {
+  it('the real knob only ever closes the SLACK, never the floor', () => {
+    // generateChunk's contract is "every gap >= MIN_GAP_S at the local speed
+    // so a full human rep always fits between obstacles". That is an
+    // ergonomics guarantee, and the most direct way to make somebody miss
+    // would be to squeeze under it. The knob multiplies EXTRA_GAP_S only.
+    expect(PACE.EXTRA_GAP_MULT_END).toBeGreaterThan(0);
+    expect(PACE.EXTRA_GAP_MULT_END).toBeLessThanOrEqual(1);
+  });
+
+  it('the cosmetic knob is a speed-up, and speed cancels out of the cadence', () => {
+    expect(PACE.SPEED_END_MULT).toBeGreaterThanOrEqual(1);
+    // sanity bound — a wild value here would be a comfort problem even
+    // though it cannot be a scoring one
+    expect(PACE.SPEED_END_MULT).toBeLessThan(1.5);
   });
 });
 

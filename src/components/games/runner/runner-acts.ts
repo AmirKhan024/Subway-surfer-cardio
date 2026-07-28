@@ -118,6 +118,87 @@ export function actWeights(p: number, out: ActWeights): void {
   out.w3 = t3;
 }
 
+// ── the finale: the Walong Beat and the Lohit Gold Rush ──────────────────
+//
+// Both live at the end of Act 3 and both are ENGAGEMENT. Neither adds or
+// removes a scored action: the Beat DEFERS obstacles rather than deleting
+// them, and the Gold Rush leaves obstacle density completely alone and pours
+// on mohurs and Koshas instead. The muscle-age cannot see either one.
+
+export const FINALE = {
+  /**
+   * The Gold Rush is the last slice of the run. Expressed as a FRACTION with
+   * a cap, not fixed seconds: 15s of a 30s session would be half the run, and
+   * the session length is the player's choice (30/60/90).
+   */
+  GOLD_RUSH_FRACTION: 0.22,
+  GOLD_RUSH_MAX_MS: 15_000,
+  /** the held breath immediately before the rush — same scaling reason */
+  BEAT_FRACTION: 0.06,
+  BEAT_MAX_MS: 3_000,
+  /**
+   * No Walong Beat below this session length.
+   *
+   * MEASURED, not guessed. The Beat defers the remaining trail rather than
+   * deleting any of it, but the run still ends on the timer, so whatever is
+   * pushed past the end never arrives — a cost of about one obstacle. A 30s
+   * run resolves 9 against an assessment-grade floor of 8, so that one
+   * obstacle IS the entire margin: with the beat on, a 30s run lands exactly
+   * on the floor, and a hurdle still pending in the last 250ms of grace
+   * would take it under.
+   *
+   * A 1.8s pause is barely a held breath anyway. Short sessions get the
+   * Gold Rush (which costs nothing) and skip the memorial.
+   */
+  BEAT_MIN_SESSION_MS: 45_000,
+} as const;
+
+export interface FinaleWindows {
+  /** progress 0..1 at which the Walong Beat opens */
+  beatStart: number;
+  /** progress at which it closes — always === rushStart */
+  beatEnd: number;
+  /** progress at which the Lohit Gold Rush opens, and runs to the finish */
+  rushStart: number;
+}
+
+/**
+ * Where the two finale moments sit for a given session length.
+ *
+ * 30s → beat 1.8s, rush 6.6s · 60s → 3.0s / 13.2s · 90s → 3.0s / 15.0s.
+ * A run with no timer (sessionMs <= 0) has no finale at all: the windows
+ * collapse to 1, so both predicates are false forever.
+ */
+export function finaleWindows(sessionMs: number): FinaleWindows {
+  if (!Number.isFinite(sessionMs) || sessionMs <= 0) {
+    return { beatStart: 1, beatEnd: 1, rushStart: 1 };
+  }
+  const rushMs = Math.min(FINALE.GOLD_RUSH_MAX_MS, sessionMs * FINALE.GOLD_RUSH_FRACTION);
+  // short sessions have no obstacle margin to spend on a pause — see
+  // BEAT_MIN_SESSION_MS. beatMs 0 collapses the window, so isWalongBeat is
+  // false for the whole run and beatStart === beatEnd === rushStart.
+  const beatMs =
+    sessionMs < FINALE.BEAT_MIN_SESSION_MS
+      ? 0
+      : Math.min(FINALE.BEAT_MAX_MS, sessionMs * FINALE.BEAT_FRACTION);
+  const rushStart = Math.max(0, 1 - rushMs / sessionMs);
+  const beatStart = Math.max(0, rushStart - beatMs / sessionMs);
+  return { beatStart, beatEnd: rushStart, rushStart };
+}
+
+/** The held breath at the memorial — no obstacles, near silence. */
+export function isWalongBeat(p: number, sessionMs: number): boolean {
+  if (!Number.isFinite(p)) return false;
+  const w = finaleWindows(sessionMs);
+  return p >= w.beatStart && p < w.beatEnd;
+}
+
+/** The gold finale — mohurs, Koshas and the horn, at unchanged difficulty. */
+export function isGoldRush(p: number, sessionMs: number): boolean {
+  if (!Number.isFinite(p)) return false;
+  return p >= finaleWindows(sessionMs).rushStart;
+}
+
 // ── the prop plan ─────────────────────────────────────────────────────────
 
 /** The three recycled trailside rows, sized and indexed exactly as buildWorld
