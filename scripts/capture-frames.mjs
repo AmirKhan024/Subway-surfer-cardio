@@ -21,6 +21,8 @@ import { chromium } from 'playwright';
 const LABEL = process.argv[2] ?? 'run';
 /** --hud skips the 90s run and captures only the HUD chrome panels */
 const HUD_ONLY = process.argv.includes('--hud');
+/** --home skips everything else and captures the landing page on two phones */
+const HOME_ONLY = process.argv.includes('--home');
 const OUT = path.resolve('.capture', LABEL);
 const PORT = 3311;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -92,8 +94,36 @@ async function main() {
       frameStats.push({ raw: t });
     });
 
+    // ---- the landing page ---------------------------------------------
+    // two viewports on purpose: 430 is the design target, 360x640 is the
+    // smallest phone the layout has to survive — the hero must not push the
+    // mode cards off the bottom there.
+    if (HOME_ONLY) {
+      for (const vp of [
+        { w: 430, h: 860, name: '00-home-430' },
+        { w: 360, h: 640, name: '00-home-360' },
+      ]) {
+        const home = await browser.newPage({
+          viewport: { width: vp.w, height: vp.h },
+          deviceScaleFactor: 2,
+        });
+        home.on('pageerror', (e) => process.stdout.write(`  PAGE ERROR: ${e.message}\n`));
+        // which candidate actually served — proves the webp is being used
+        home.on('response', (r) => {
+          if (r.url().includes('hero-soldier')) {
+            process.stdout.write(`  served ${r.url().split('/').pop()} → ${r.status()}\n`);
+          }
+        });
+        await home.goto(ORIGIN, { waitUntil: 'networkidle' });
+        await home.waitForTimeout(600);
+        await home.screenshot({ path: path.join(OUT, `${vp.name}.png`) });
+        process.stdout.write(`  ${vp.name}\n`);
+        await home.close();
+      }
+    }
+
     // ---- the live run -------------------------------------------------
-    if (!HUD_ONLY) {
+    if (!HUD_ONLY && !HOME_ONLY) {
       await page.goto(`${ORIGIN}/?debug=1&kbd=1&sec=${SESSION_SEC}`, {
         waitUntil: 'domcontentloaded',
       });
@@ -121,6 +151,7 @@ async function main() {
     // ---- HUD chrome panels --------------------------------------------
     // phone-width viewport: the cluster's 38vw wrap and the sm: breakpoint are
     // viewport-driven, so a wide window would show a layout no player sees
+    if (HOME_ONLY) return;
     const hud = await browser.newPage({ viewport: { width: 430, height: 900 }, deviceScaleFactor: 2 });
     await hud.goto(`${ORIGIN}/dev/hud`, { waitUntil: 'networkidle' });
     await hud.waitForTimeout(800);
